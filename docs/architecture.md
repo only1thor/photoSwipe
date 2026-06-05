@@ -16,7 +16,10 @@ on the client.
 │  photoSwipe binary (Go)                                      │
 │  internal/handlers ─┬─ internal/queue   (resurface algo)     │
 │                     ├─ internal/store   (state, undo stack)  │
-│                     ├─ internal/img     (scan, trash move)   │
+│                     ├─ internal/img     (scan, thumbs, trash)│
+│                     ├─ internal/dhash   (perceptual hash)    │
+│                     ├─ internal/dupes   (cluster algorithm)  │
+│                     ├─ internal/indexer (background hasher)  │
 │                     └─ internal/auth    (password, cookie)   │
 └─────────────────────────▲────────────────────────────────────┘
                           │  filesystem only
@@ -24,6 +27,7 @@ on the client.
 │  <photo-dir>/                                                │
 │    .photosort-state.json     ← all decisions + settings      │
 │    .trash/                   ← swiped-left files (immediate) │
+│    .thumbs/                  ← cached JPEG thumbs (lazy)     │
 │    holiday/IMG_0001.jpg      ← your photos, untouched        │
 │    ...                                                       │
 └──────────────────────────────────────────────────────────────┘
@@ -49,7 +53,10 @@ It's written atomically (`*.tmp` + rename) on every mutation.
       "locked": false,               // never resurface if true
       "size_bytes": 4_182_733,
       "added_at": "...",
-      "trashed_path": ""             // set when state=trashed
+      "trashed_path": "",            // set when state=trashed
+      "dhash": 16028324..,           // 64-bit perceptual fingerprint
+      "dhashed_at": "...",           // zero = not yet hashed
+      "time": "..."                  // file mtime; used as capture-time proxy
     }
   },
   "session": {                       // null between sessions
@@ -67,7 +74,9 @@ It's written atomically (`*.tmp` + rename) on every mutation.
     "cooldown_hours": 6,
     "lock_threshold": 0,             // 0 = no auto-lock
     "fatigue_nudge": false,
-    "fatigue_threshold": 100
+    "fatigue_threshold": 100,
+    "dupe_threshold": 10,             // max Hamming distance for near-dups
+    "dupe_time_window_hours": 0       // 0 = no window; else hours of slack
   },
   "daily_stats": { "2026-06-05": 47 } // for the fatigue nudge
 }
@@ -143,6 +152,93 @@ resurface — effectively locked unless you also lower `cooldown_hours`.
 As the unsorted pool shrinks, the relative resurface probability rises
 automatically (the total weight goes down, kept weights stay the same).
 
+## Near-duplicate detection
+
+### dHash (`internal/dhash`)
+
+A perceptual fingerprint that's robust to compression, scale changes, and
+small edits. Per image:
+
+1. Resize to **9×8 grayscale** via `golang.org/x/image/draw` (bilinear).
+2. For each of the 8 rows, compare each pixel to its right neighbour.
+3. Emit one bit per comparison (`1` if left brighter than right).
+4. Pack the 64 bits into a `uint64`.
+
+Result: `Distance(a, b) := popcount(a XOR b)` → Hamming distance in 0…64.
+
+### Clustering (`internal/dupes`)
+
+`dupes.Find(photos, distanceThreshold, timeWindow) → []Cluster`:
+
+1. **Eligibility filter**: skip trashed photos and photos that haven't
+   been hashed yet (zero `DHashedAt`). At least 2 photos required.
+2. **Sort by `Photo.Time`** so a time window can be enforced via early
+   break-out.
+3. **Pairwise union-find**:
+
+   ```go
+   for i := 0; i < N; i++ {
+     for j := i + 1; j < N; j++ {
+       if timeWindow > 0 && time[j] - time[i] > timeWindow { break }
+       if dhash.Distance(h[i], h[j]) <= distanceThreshold {
+         union(id[i], id[j])
+       }
+     }
+   }
+   ```
+
+   The break on time is what turns this from O(N²) into O(N · W) when a
+   window is set.
+4. **Cluster ID** = lex-smallest member ID, so identity is stable across
+   reruns even though union-find iteration order isn't.
+5. **Members sorted** by `SizeBytes` desc — the first entry is the
+   default "best" pick.
+6. Singletons are dropped.
+
+### Background indexer (`internal/indexer`)
+
+A single goroutine started from `main.go` after the initial scan. Loop:
+
+1. Ask the store for the next photo with `DHashedAt.IsZero() &&
+   State != trashed`. Snapshot returned (cheap copy).
+2. Decode the file header just enough to get an `image.Image`.
+3. Compute the dHash; write back via `Store.SetHash(id, hash)`.
+4. On any error, mark the photo as `DHash = 0, DHashedAt = now` so we
+   don't retry forever — `MarkHashFailed`.
+5. When there's nothing to hash, sleep 30 s and try again (picks up new
+   photos added by future rescans).
+6. On shutdown, `Stop()` closes the channel and waits for the loop to
+   exit between iterations.
+
+This makes hashing **eventually consistent**: the duplicates view shows
+results for whatever has been indexed so far, with a progress indicator.
+
+### Time window — what about EXIF?
+
+`Photo.Time` is populated from the file's mtime at scan, not from EXIF
+DateTimeOriginal. Reasoning: EXIF parsing would add ~80 lines of pure-Go
+JPEG marker walking (acceptable) but introduces format-specific quirks
+that aren't worth it for v1. mtime tracks well for unmodified imports
+(rsync `-t`, photo backup apps); it can be wrong if the file has been
+re-saved by an editor. For users with editor-touched archives, set
+`dupe_time_window_hours` to 0 to disable the window.
+
+EXIF orientation is also intentionally not handled — see the v1 caveats
+in the README. The browser preserves orientation when serving raw
+images via `/photo/{id}`; thumbnails via `/thumb/{id}` lose orientation
+because we re-encode after resize.
+
+### Thumbnails (`internal/img.ServeThumb`)
+
+Lazy, on-demand JPEG thumbnails for the cluster grid. Sized at most
+`ThumbnailMaxSide = 1600` pixels on the longest side. Cached to
+`<photo-dir>/.thumbs/<id>-<width>.jpg`. The cache directory starts with
+a dot so the scanner skips it. Atomic writes via `*.tmp` + rename, same
+pattern as the state file.
+
+The full swipe flow does **not** use thumbnails — it serves the raw
+image, so EXIF orientation is preserved.
+
 ## Session lifecycle
 
 ```
@@ -191,10 +287,13 @@ transient swipe-gesture buffer.
 | `/decision`         | POST   | **fragment** `card` (or `HX-Redirect: /` if done) |
 | `/undo`             | POST   | **fragment** `card`                               |
 | `/photo/{id}`       | GET    | raw image bytes                                   |
+| `/thumb/{id}?w=N`   | GET    | JPEG thumbnail (≤1600 px); cached to `.thumbs/`   |
 | `/meta/{id}`        | GET    | **fragment** `meta` (size, dims, mtime)           |
 | `/settings`         | GET    | full page                                         |
 | `/settings`         | POST   | 303 → `/settings`                                 |
 | `/rescan`           | POST   | tiny HTML status fragment                         |
+| `/duplicates`       | GET    | full page: cluster review or "all clear"          |
+| `/duplicates/resolve` | POST | applies `keep_best` / `keep_all` / `trash_all` / `skip`; 303 → `/duplicates` |
 | `/static/*`         | GET    | embedded htmx, app.css, app.js                    |
 
 When a decision completes the session, `/decision` returns `204 No Content`

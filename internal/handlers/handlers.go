@@ -13,7 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"net/url"
+
 	"photoSwipe/internal/auth"
+	"photoSwipe/internal/dupes"
 	"photoSwipe/internal/img"
 	"photoSwipe/internal/queue"
 	"photoSwipe/internal/store"
@@ -38,6 +41,7 @@ type handler struct {
 	tplPhoto        *template.Template
 	tplSummary      *template.Template
 	tplSettings     *template.Template
+	tplDuplicates   *template.Template
 	tplCard         *template.Template
 	tplMeta         *template.Template
 }
@@ -74,10 +78,13 @@ func New(d Deps) (http.Handler, error) {
 	mux.HandleFunc("POST /decision", h.handleDecision)
 	mux.HandleFunc("POST /undo", h.handleUndo)
 	mux.HandleFunc("GET /photo/{id}", h.handleServePhoto)
+	mux.HandleFunc("GET /thumb/{id}", h.handleThumb)
 	mux.HandleFunc("GET /meta/{id}", h.handleMeta)
 	mux.HandleFunc("GET /settings", h.handleSettings)
 	mux.HandleFunc("POST /settings", h.handleUpdateSettings)
 	mux.HandleFunc("POST /rescan", h.handleRescan)
+	mux.HandleFunc("GET /duplicates", h.handleDuplicates)
+	mux.HandleFunc("POST /duplicates/resolve", h.handleDuplicatesResolve)
 
 	return h.auth.Middleware(mux), nil
 }
@@ -132,6 +139,9 @@ func (h *handler) loadTemplates() error {
 	if h.tplSettings, err = makePage("settings.html"); err != nil {
 		return err
 	}
+	if h.tplDuplicates, err = makePage("duplicates.html"); err != nil {
+		return err
+	}
 	if h.tplCard, err = makeFragment("frag_card.html", "card"); err != nil {
 		return err
 	}
@@ -157,6 +167,26 @@ type pageData struct {
 	Path, PathShort  string
 	SizeKB           int64
 	ModTime          string
+
+	// Duplicates page
+	HasCluster      bool
+	ClusterID       string
+	Photos          []DupPhoto
+	Position        int
+	TotalClusters   int
+	SkippedList     string
+	Indexing        bool
+	Indexed         int
+	Total           int
+	Threshold       int
+	TimeWindowHours float64
+}
+
+// DupPhoto is a view-model for one entry in a cluster grid.
+type DupPhoto struct {
+	ID, Path, PathShort, TimeStr string
+	SizeKB                       int64
+	IsBest                       bool
 }
 
 func (h *handler) counts() Counts {
@@ -453,6 +483,8 @@ func (h *handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	cur.LockThreshold = parseI("lock_threshold", cur.LockThreshold)
 	cur.FatigueNudge = r.PostFormValue("fatigue_nudge") != ""
 	cur.FatigueThreshold = parseI("fatigue_threshold", cur.FatigueThreshold)
+	cur.DupeThreshold = parseI("dupe_threshold", cur.DupeThreshold)
+	cur.DupeTimeWindowHours = parseF("dupe_time_window_hours", cur.DupeTimeWindowHours)
 	if err := h.deps.Store.UpdateSettings(cur); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -493,6 +525,196 @@ func (h *handler) summaryData(sess *store.Session) pageData {
 		ShowFatigueNudge: settings.FatigueNudge && todayCount >= settings.FatigueThreshold,
 		TodayCount:       todayCount,
 	}
+}
+
+func (h *handler) handleThumb(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	width := 600
+	if s := r.URL.Query().Get("w"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			width = n
+		}
+	}
+	photo, ok := h.deps.Store.GetPhoto(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	abs, err := h.resolvePhotoPath(photo.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	if err := img.ServeThumb(abs, h.deps.PhotoDir, id, width, w); err != nil {
+		log.Printf("thumb %s: %v", id, err)
+	}
+}
+
+func (h *handler) handleDuplicates(w http.ResponseWriter, r *http.Request) {
+	skippedRaw := r.URL.Query().Get("skipped")
+	skippedSet := map[string]bool{}
+	for _, id := range splitCSV(skippedRaw) {
+		skippedSet[id] = true
+	}
+
+	settings := h.deps.Store.Settings()
+	window := time.Duration(settings.DupeTimeWindowHours * float64(time.Hour))
+	clusters := dupes.Find(h.deps.Store.AllPhotos(), settings.DupeThreshold, window)
+
+	var active *dupes.Cluster
+	var position int
+	for i := range clusters {
+		if skippedSet[clusters[i].ID] {
+			continue
+		}
+		active = &clusters[i]
+		position = i + 1
+		break
+	}
+
+	hashed, total := h.deps.Store.HashProgress()
+	data := pageData{
+		BodyClass:       "duplicates-body",
+		Session:         h.deps.Store.Session(),
+		Indexing:        hashed < total,
+		Indexed:         hashed,
+		Total:           total,
+		Threshold:       settings.DupeThreshold,
+		TimeWindowHours: settings.DupeTimeWindowHours,
+		TotalClusters:   len(clusters),
+		SkippedList:     skippedRaw,
+	}
+	if active != nil {
+		data.HasCluster = true
+		data.ClusterID = active.ID
+		data.Position = position
+		data.Photos = toDupPhotos(active.Photos, active.Photos[0].ID)
+	}
+	h.renderPage(w, h.tplDuplicates, data)
+}
+
+func (h *handler) handleDuplicatesResolve(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	action := r.PostFormValue("action")
+	clusterID := r.PostFormValue("cluster_id")
+	bestID := r.PostFormValue("best_id")
+	skipped := r.PostFormValue("skipped")
+
+	if action == "skip" {
+		skipped = appendCSV(skipped, clusterID)
+		http.Redirect(w, r, "/duplicates?skipped="+url.QueryEscape(skipped), http.StatusSeeOther)
+		return
+	}
+
+	settings := h.deps.Store.Settings()
+	window := time.Duration(settings.DupeTimeWindowHours * float64(time.Hour))
+	clusters := dupes.Find(h.deps.Store.AllPhotos(), settings.DupeThreshold, window)
+
+	var target *dupes.Cluster
+	for i := range clusters {
+		if clusters[i].ID == clusterID {
+			target = &clusters[i]
+			break
+		}
+	}
+	if target == nil {
+		// Cluster vanished (race or already resolved); just move on.
+		http.Redirect(w, r, "/duplicates?skipped="+url.QueryEscape(skipped), http.StatusSeeOther)
+		return
+	}
+
+	for _, p := range target.Photos {
+		switch action {
+		case "keep_best":
+			if p.ID == bestID {
+				if err := h.deps.Store.SetPhotoState(p.ID, store.StateKept, ""); err != nil {
+					log.Printf("keep_best/keep %s: %v", p.ID, err)
+				}
+			} else {
+				h.trashOne(p)
+			}
+		case "keep_all":
+			if err := h.deps.Store.SetPhotoState(p.ID, store.StateKept, ""); err != nil {
+				log.Printf("keep_all %s: %v", p.ID, err)
+			}
+		case "trash_all":
+			h.trashOne(p)
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+			return
+		}
+	}
+
+	http.Redirect(w, r, "/duplicates?skipped="+url.QueryEscape(skipped), http.StatusSeeOther)
+}
+
+func (h *handler) trashOne(p *store.Photo) {
+	if p.State == store.StateTrashed {
+		return
+	}
+	src, err := h.resolvePhotoPath(p.Path)
+	if err != nil {
+		log.Printf("resolve %s: %v", p.ID, err)
+		return
+	}
+	dst, err := img.MoveToTrash(src, h.deps.PhotoDir, h.deps.TrashDir)
+	if err != nil {
+		log.Printf("trash %s: %v", p.ID, err)
+		return
+	}
+	if err := h.deps.Store.SetPhotoState(p.ID, store.StateTrashed, dst); err != nil {
+		log.Printf("set state trashed %s: %v", p.ID, err)
+	}
+}
+
+func toDupPhotos(photos []*store.Photo, bestID string) []DupPhoto {
+	out := make([]DupPhoto, 0, len(photos))
+	for _, p := range photos {
+		short := p.Path
+		if i := strings.LastIndex(short, "/"); i >= 0 {
+			short = short[i+1:]
+		}
+		var ts string
+		if !p.Time.IsZero() {
+			ts = p.Time.Format("2006-01-02 15:04")
+		}
+		out = append(out, DupPhoto{
+			ID:        p.ID,
+			Path:      p.Path,
+			PathShort: short,
+			TimeStr:   ts,
+			SizeKB:    (p.SizeBytes + 1023) / 1024,
+			IsBest:    p.ID == bestID,
+		})
+	}
+	return out
+}
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+func appendCSV(s, v string) string {
+	if v == "" {
+		return s
+	}
+	if s == "" {
+		return v
+	}
+	for _, e := range strings.Split(s, ",") {
+		if e == v {
+			return s
+		}
+	}
+	return s + "," + v
 }
 
 // resolvePhotoPath joins relPath under photoDir, rejecting traversal.

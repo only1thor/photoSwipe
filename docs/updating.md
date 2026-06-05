@@ -184,15 +184,48 @@ deliberate copy is cheaper than worrying.
 The defaults are in `store.DefaultSettings()`. They are applied:
 
 - on first run (no state file exists yet)
-- on load when `BaseRate == 0` (treated as uninitialized)
+- on load when `BaseRate == 0` (treated as uninitialized — resets all)
+- on load when a specific field is 0 and has a per-field defaulting branch
+  in `store.load()` (e.g. `DupeThreshold`)
 
 If you change a default after users already have a state file, **their
 existing setting wins** — that's by design. To force a settings reset for
 a user, delete the `"settings"` key from their state file (and `BaseRate`
 will be 0, triggering the defaults branch).
 
+**Adding a new setting that should default to a non-zero value:**
+
+1. Add the field to `Settings` in `internal/store/session.go`.
+2. Add the default in `DefaultSettings()`.
+3. Add a per-field defaulting branch in `store.load()`:
+
+   ```go
+   if rs.Settings.MyNewSetting == 0 {
+       rs.Settings.MyNewSetting = DefaultSettings().MyNewSetting
+   }
+   ```
+
+   Without this, existing users will see 0 (often disabled/broken) instead
+   of the default.
+4. Add a row in the settings template.
+5. Parse it in `handleUpdateSettings`.
+
 Document the change in the [architecture.md](architecture.md) "Defaults"
 table so future-you remembers why a kept photo's weight suddenly halved.
+
+## Adding fields to `Photo`
+
+The duplicates feature added `DHash`, `DHashedAt`, and `Time` to `Photo`.
+Pattern for future additions:
+
+1. Add the field with a `json:"omitempty"` tag where appropriate so old
+   files stay readable.
+2. If the field needs to be populated for *existing* photos (not just
+   new ones), thread the value through `UpsertPhoto` and re-run on rescan.
+3. If the field needs to be *computed* on existing photos, add a sentinel
+   ("not yet computed") and a background worker like `internal/indexer`.
+4. Don't bump `stateFileVersion` unless an *existing* field changes
+   semantics. Pure additions stay at v1.
 
 ## Rotate the password
 

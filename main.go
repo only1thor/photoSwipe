@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"photoSwipe/internal/handlers"
+	"photoSwipe/internal/indexer"
 	"photoSwipe/internal/store"
 )
 
@@ -99,6 +100,9 @@ func main() {
 		log.Fatalf("handlers: %v", err)
 	}
 
+	ix := indexer.New(st, cfg.photoDir)
+	ix.Start()
+
 	srv := &http.Server{
 		Addr:              cfg.addr,
 		Handler:           h,
@@ -122,6 +126,7 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	ix.Stop()
 	if err := st.Close(); err != nil {
 		log.Printf("store close: %v", err)
 	}

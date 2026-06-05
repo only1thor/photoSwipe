@@ -94,15 +94,22 @@ swipe gestures feel native on mobile Safari and Chrome.
 
 ```
 <photo-dir>/
-├── .photosort-state.json   ← single source of truth for decisions
-├── .trash/                 ← files moved here on swipe-left
+├── .photosort-state.json   ← single source of truth for decisions + hashes
+├── .trash/                 ← files moved here on swipe-left or trash_all
 │   ├── holiday/IMG_0001.jpg
+│   └── ...
+├── .thumbs/                ← cached JPEG thumbs (regenerable, safe to nuke)
+│   ├── <id>-600.jpg
 │   └── ...
 ├── holiday/                ← your folder structure is preserved
 │   ├── IMG_0001.jpg
 │   └── ...
 └── ...
 ```
+
+The `.thumbs/` directory is safe to delete at any time — thumbnails
+regenerate on next request. Sizing: roughly the count of distinct
+`(photo, width)` pairs you've viewed in the duplicates UI, each ~30-150 KB.
 
 The scan ignores any directory whose name starts with `.` (so
 `.git/`, `.cache/`, `.thumbnails/`, etc. are silently skipped).
@@ -155,6 +162,9 @@ The app writes to stdout/stderr in Go's default `log` format. Useful lines:
 |------------------------------------------------|--------------------------------------------------|
 | `photoSwipe starting — photos=... addr=...`   | Boot                                              |
 | `scan: N new, M total`                         | Initial or rescan: new photos found / total seen  |
+| `indexer: started`                             | Background dHash indexer is running               |
+| `indexer: <path>: <error>`                     | One photo couldn't be hashed (will not retry)     |
+| `indexer: stopped (hashed N this run)`         | Indexer exited cleanly at shutdown                |
 | `restore failed: ...`                          | Undo could not move a trashed file back           |
 | `shutting down`                                | Received SIGINT/SIGTERM, draining HTTP            |
 
@@ -206,6 +216,32 @@ Check the browser console for an integrity-mismatch error. If the file in
 `web/static/htmx.min.js` doesn't match the SHA-384 SRI in
 `web/templates/layout.html`, browsers refuse to execute it. See
 [updating.md](updating.md) — "Updating htmx".
+
+### Duplicate clusters keep coming back after I resolved them
+
+Refresh the page once. `/duplicates` is stateless on the server — the
+"skipped" set is round-tripped in the URL, so a back-button can
+re-show a cluster you skipped. The only way to permanently make a
+cluster disappear is to apply one of the non-skip actions
+(`keep_best`, `keep_all`, `trash_all`), which change underlying photo
+states.
+
+### The duplicates page says "Indexing in background" for hours
+
+Each photo costs roughly *decode + 9×8 resize* — fast for normal JPEGs
+but minutes per huge RAW or for misbehaving files. Check the log for
+`indexer:` lines. Photos that fail to decode are skipped and won't be
+retried. To see exact counts, the page shows `<hashed> / <total>`.
+
+### Wrong files are getting clustered
+
+Two knobs in **settings**:
+
+- Lower `dupe_threshold` (down to e.g. 6) — only nearly-identical
+  photos cluster. Burst shots usually differ by ≤ 4 bits.
+- Set `dupe_time_window_hours` to a non-zero value (e.g. 24 for
+  "same day", 0.1 for "burst-only"). Photos taken further apart
+  than the window will not be compared even if their hashes match.
 
 ### Session got stuck on the summary page
 

@@ -59,6 +59,13 @@ type Settings struct {
 	LockThreshold    int     `json:"lock_threshold"`
 	FatigueNudge     bool    `json:"fatigue_nudge"`
 	FatigueThreshold int     `json:"fatigue_threshold"`
+	// DupeThreshold is the maximum Hamming distance (out of 64) between two
+	// dHashes for the photos to be considered near-duplicates.
+	DupeThreshold int `json:"dupe_threshold"`
+	// DupeTimeWindowHours restricts near-duplicate comparison to photos
+	// taken within this many hours of each other. 0 disables the window
+	// (compare all photos against each other).
+	DupeTimeWindowHours float64 `json:"dupe_time_window_hours"`
 }
 
 func DefaultSettings() Settings {
@@ -70,5 +77,6 @@ func DefaultSettings() Settings {
 		LockThreshold:    0,
 		FatigueNudge:     false,
 		FatigueThreshold: 100,
+		DupeThreshold:    10,
 	}
 }

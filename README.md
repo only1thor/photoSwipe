@@ -23,6 +23,11 @@ dependency (`golang.org/x/image`), vendored htmx pinned with SRI, and a
 - **EXIF-less metadata panel** — dimensions, file size, mtime (HEIC and
   full EXIF intentionally deferred; both would break `FROM scratch`).
 - **Single-password auth** with constant-time compare and HTTP-only cookies.
+- **Near-duplicate detection** via dHash (perceptual fingerprint), with an
+  optional capture-time window to constrain comparison to bursts. A
+  background indexer hashes new photos lazily. The `/duplicates` page
+  reviews one cluster at a time with *Keep best · Keep all · Trash all ·
+  Skip* actions.
 
 ## Quick start
 
@@ -105,7 +110,10 @@ photoSwipe/
 ├── internal/
 │   ├── store/               JSON sidecar, Photo/Session/Decision
 │   ├── queue/               resurface algorithm + tests
-│   ├── img/                 scan, metadata, trash move/restore
+│   ├── img/                 scan, metadata, thumbnails, trash move/restore
+│   ├── dhash/               perceptual hash + Hamming distance + tests
+│   ├── dupes/               union-find clustering with time window + tests
+│   ├── indexer/             background goroutine that hashes unhashed photos
 │   ├── auth/                password gate + cookie session
 │   └── handlers/            HTTP routes, template loading
 ├── web/

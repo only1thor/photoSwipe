@@ -80,6 +80,9 @@ func (s *Store) load() error {
 	if rs.Settings.BaseRate == 0 {
 		rs.Settings = DefaultSettings()
 	}
+	if rs.Settings.DupeThreshold == 0 {
+		rs.Settings.DupeThreshold = DefaultSettings().DupeThreshold
+	}
 	s.state = rs
 	return nil
 }
@@ -104,13 +107,24 @@ func (s *Store) Close() error {
 
 // UpsertPhoto registers or updates a photo discovered by scan. Returns the
 // canonical photo and a boolean indicating whether it was newly added.
-func (s *Store) UpsertPhoto(relPath string, sizeBytes int64) (*Photo, bool, error) {
+// The mtime argument is the file's modification time, used as a capture-time
+// proxy for near-duplicate clustering windows.
+func (s *Store) UpsertPhoto(relPath string, sizeBytes int64, mtime time.Time) (*Photo, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := PhotoID(relPath)
 	if p, ok := s.state.Photos[id]; ok {
+		changed := false
 		if p.SizeBytes != sizeBytes {
 			p.SizeBytes = sizeBytes
+			changed = true
+		}
+		if p.Time.IsZero() && !mtime.IsZero() {
+			p.Time = mtime
+			changed = true
+		}
+		if changed {
+			_ = s.saveLocked()
 		}
 		return p, false, nil
 	}
@@ -120,9 +134,70 @@ func (s *Store) UpsertPhoto(relPath string, sizeBytes int64) (*Photo, bool, erro
 		State:     StateUnsorted,
 		SizeBytes: sizeBytes,
 		AddedAt:   time.Now(),
+		Time:      mtime,
 	}
 	s.state.Photos[id] = p
 	return p, true, s.saveLocked()
+}
+
+// NextUnhashed returns one photo that hasn't been hashed yet (DHashedAt
+// is zero) and isn't trashed. Returns nil if there's nothing to hash.
+func (s *Store) NextUnhashed() *Photo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.state.Photos {
+		if p.State == StateTrashed {
+			continue
+		}
+		if p.DHashedAt.IsZero() {
+			clone := *p
+			return &clone
+		}
+	}
+	return nil
+}
+
+// SetHash records a successful hash computation.
+func (s *Store) SetHash(id string, hash uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.state.Photos[id]
+	if !ok {
+		return errors.New("photo not found")
+	}
+	p.DHash = hash
+	p.DHashedAt = time.Now()
+	return s.saveLocked()
+}
+
+// MarkHashFailed records a failed hash attempt so the indexer won't retry.
+func (s *Store) MarkHashFailed(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.state.Photos[id]
+	if !ok {
+		return errors.New("photo not found")
+	}
+	p.DHash = 0
+	p.DHashedAt = time.Now()
+	return s.saveLocked()
+}
+
+// HashProgress returns (hashed, total) counts over the non-trashed pool.
+func (s *Store) HashProgress() (int, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var hashed, total int
+	for _, p := range s.state.Photos {
+		if p.State == StateTrashed {
+			continue
+		}
+		total++
+		if !p.DHashedAt.IsZero() {
+			hashed++
+		}
+	}
+	return hashed, total
 }
 
 // ForgetMissing removes photos whose IDs are not in the keep set. Returns
@@ -288,6 +363,32 @@ func (s *Store) RecordDecision(photoID string, newState PhotoState, trashFrom, t
 		return nil, err
 	}
 	return &d, nil
+}
+
+// SetPhotoState changes a photo's state outside of any session — used by
+// the duplicates resolution flow. Does NOT touch the session undo stack
+// or session.Done; bumps daily decision count.
+func (s *Store) SetPhotoState(id string, newState PhotoState, trashTo string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.state.Photos[id]
+	if !ok {
+		return fmt.Errorf("photo %s not found", id)
+	}
+	now := time.Now()
+	switch newState {
+	case StateKept:
+		p.KeepCount++
+	case StateUnsure:
+		p.UnsureCount++
+	case StateTrashed:
+		p.TrashedPath = trashTo
+	}
+	p.State = newState
+	p.LastDecisionAt = now
+	p.LastSeenAt = now
+	s.state.DailyStats[now.Format("2006-01-02")]++
+	return s.saveLocked()
 }
 
 // Undo pops the most recent decision and reverts the photo. The caller is

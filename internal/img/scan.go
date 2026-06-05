@@ -55,7 +55,7 @@ func Scan(photoDir, trashDir string, st *store.Store) (added, total int, err err
 		if err != nil {
 			return err
 		}
-		_, isNew, err := st.UpsertPhoto(rel, info.Size())
+		_, isNew, err := st.UpsertPhoto(rel, info.Size(), info.ModTime())
 		if err != nil {
 			return err
 		}
