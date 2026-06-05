@@ -1,0 +1,29 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>photoSwipe</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js"
+          integrity="sha384-ESlCao+z/oasnu2Uc/5K1LQTI7YCF2KKO4xakCPQCFuiHhCh8Oa/R5NwHY6guZ3m"
+          defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body class="{{.BodyClass}}">
+  <header>
+    <a class="brand" href="/">photoSwipe</a>
+    {{if .Session}}
+    <div class="progress" title="decisions this session">
+      <span class="done">{{.Session.Done}}</span>{{if gt .Session.Target 0}}<span class="of"> / {{.Session.Target}}</span>{{end}}
+    </div>
+    {{end}}
+    <nav>
+      <a href="/settings">settings</a>
+      <a href="/logout">logout</a>
+    </nav>
+  </header>
+  <main>{{template "content" .}}</main>
+</body>
+</html>{{end}}

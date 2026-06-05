@@ -1,0 +1,375 @@
+package store
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+)
+
+const (
+	stateFileName    = ".photosort-state.json"
+	stateFileVersion = 1
+	staleSessionAge  = 24 * time.Hour
+)
+
+// rootState is the on-disk JSON layout.
+type rootState struct {
+	Version    int               `json:"version"`
+	Photos     map[string]*Photo `json:"photos"`
+	Session    *Session          `json:"session,omitempty"`
+	Settings   Settings          `json:"settings"`
+	DailyStats map[string]int    `json:"daily_stats"`
+}
+
+type Store struct {
+	mu       sync.RWMutex
+	path     string
+	photoDir string
+	state    rootState
+}
+
+func Open(photoDir string) (*Store, error) {
+	s := &Store{
+		path:     filepath.Join(photoDir, stateFileName),
+		photoDir: photoDir,
+		state: rootState{
+			Version:    stateFileVersion,
+			Photos:     map[string]*Photo{},
+			Settings:   DefaultSettings(),
+			DailyStats: map[string]int{},
+		},
+	}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	// Drop stale sessions on startup.
+	if s.state.Session != nil && s.state.Session.Stale(time.Now(), staleSessionAge) {
+		s.state.Session = nil
+		if err := s.saveLocked(); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+func (s *Store) load() error {
+	data, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.saveLocked()
+	}
+	if err != nil {
+		return err
+	}
+	var rs rootState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return fmt.Errorf("parse state: %w", err)
+	}
+	if rs.Photos == nil {
+		rs.Photos = map[string]*Photo{}
+	}
+	if rs.DailyStats == nil {
+		rs.DailyStats = map[string]int{}
+	}
+	if rs.Settings.BaseRate == 0 {
+		rs.Settings = DefaultSettings()
+	}
+	s.state = rs
+	return nil
+}
+
+func (s *Store) saveLocked() error {
+	data, err := json.MarshalIndent(&s.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
+}
+
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked()
+}
+
+// UpsertPhoto registers or updates a photo discovered by scan. Returns the
+// canonical photo and a boolean indicating whether it was newly added.
+func (s *Store) UpsertPhoto(relPath string, sizeBytes int64) (*Photo, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := PhotoID(relPath)
+	if p, ok := s.state.Photos[id]; ok {
+		if p.SizeBytes != sizeBytes {
+			p.SizeBytes = sizeBytes
+		}
+		return p, false, nil
+	}
+	p := &Photo{
+		ID:        id,
+		Path:      relPath,
+		State:     StateUnsorted,
+		SizeBytes: sizeBytes,
+		AddedAt:   time.Now(),
+	}
+	s.state.Photos[id] = p
+	return p, true, s.saveLocked()
+}
+
+// ForgetMissing removes photos whose IDs are not in the keep set. Returns
+// the count removed.
+func (s *Store) ForgetMissing(keep map[string]struct{}) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var removed int
+	for id, p := range s.state.Photos {
+		if _, ok := keep[id]; ok {
+			continue
+		}
+		// Keep already-trashed entries even if file moved; otherwise drop.
+		if p.State == StateTrashed {
+			continue
+		}
+		delete(s.state.Photos, id)
+		removed++
+	}
+	if removed > 0 {
+		return removed, s.saveLocked()
+	}
+	return 0, nil
+}
+
+func (s *Store) GetPhoto(id string) (*Photo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.state.Photos[id]
+	if !ok {
+		return nil, false
+	}
+	clone := *p
+	return &clone, true
+}
+
+// AllPhotos returns a snapshot slice of all photos.
+func (s *Store) AllPhotos() []*Photo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Photo, 0, len(s.state.Photos))
+	for _, p := range s.state.Photos {
+		clone := *p
+		out = append(out, &clone)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// MarkSeen updates LastSeenAt for a photo without recording a decision.
+func (s *Store) MarkSeen(id string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.state.Photos[id]; ok {
+		p.LastSeenAt = now
+		_ = s.saveLocked()
+	}
+}
+
+// Session returns a snapshot of the current session, or nil.
+func (s *Store) Session() *Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.state.Session == nil {
+		return nil
+	}
+	clone := *s.state.Session
+	clone.Stack = append([]Decision(nil), s.state.Session.Stack...)
+	return &clone
+}
+
+func (s *Store) StartSession(target int, mix CompositionMix) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !mix.Valid() {
+		return nil, fmt.Errorf("invalid mix %q", mix)
+	}
+	if target < 0 {
+		return nil, errors.New("target must be >= 0")
+	}
+	id, err := randID()
+	if err != nil {
+		return nil, err
+	}
+	s.state.Session = &Session{
+		ID:        id,
+		StartedAt: time.Now(),
+		Target:    target,
+		Mix:       mix,
+	}
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	clone := *s.state.Session
+	return &clone, nil
+}
+
+func (s *Store) EndSession() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Session = nil
+	return s.saveLocked()
+}
+
+// SessionExtend bumps the session target by delta. delta=0 leaves it open-ended.
+func (s *Store) SessionExtend(delta int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Session == nil {
+		return errors.New("no active session")
+	}
+	if delta <= 0 {
+		s.state.Session.Target = 0
+	} else if s.state.Session.Target > 0 {
+		s.state.Session.Target += delta
+	}
+	return s.saveLocked()
+}
+
+// RecordDecision mutates the photo state, increments session counters,
+// and pushes the prior state onto the undo stack.
+func (s *Store) RecordDecision(photoID string, newState PhotoState, trashFrom, trashTo string) (*Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.state.Photos[photoID]
+	if !ok {
+		return nil, fmt.Errorf("photo %s not found", photoID)
+	}
+	if s.state.Session == nil {
+		return nil, errors.New("no active session")
+	}
+	now := time.Now()
+	d := Decision{
+		PhotoID:         photoID,
+		PrevState:       p.State,
+		NewState:        newState,
+		Timestamp:       now,
+		PrevKeepCount:   p.KeepCount,
+		PrevUnsureCount: p.UnsureCount,
+		PrevLastSeenAt:  p.LastSeenAt,
+		TrashFrom:       trashFrom,
+		TrashTo:         trashTo,
+	}
+	switch newState {
+	case StateKept:
+		p.KeepCount++
+	case StateUnsure:
+		p.UnsureCount++
+	case StateTrashed:
+		p.TrashedPath = trashTo
+	}
+	p.State = newState
+	p.LastDecisionAt = now
+	p.LastSeenAt = now
+
+	s.state.Session.Done++
+	s.state.Session.Stack = append(s.state.Session.Stack, d)
+
+	day := now.Format("2006-01-02")
+	s.state.DailyStats[day]++
+
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// Undo pops the most recent decision and reverts the photo. The caller is
+// responsible for any filesystem rollback (moving a file back from trash).
+func (s *Store) Undo() (*Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Session == nil || len(s.state.Session.Stack) == 0 {
+		return nil, errors.New("nothing to undo")
+	}
+	last := s.state.Session.Stack[len(s.state.Session.Stack)-1]
+	s.state.Session.Stack = s.state.Session.Stack[:len(s.state.Session.Stack)-1]
+
+	p, ok := s.state.Photos[last.PhotoID]
+	if !ok {
+		return nil, fmt.Errorf("photo %s not found", last.PhotoID)
+	}
+	p.State = last.PrevState
+	p.KeepCount = last.PrevKeepCount
+	p.UnsureCount = last.PrevUnsureCount
+	p.LastSeenAt = last.PrevLastSeenAt
+	if last.NewState == StateTrashed {
+		p.TrashedPath = ""
+	}
+
+	if s.state.Session.Done > 0 {
+		s.state.Session.Done--
+	}
+	day := last.Timestamp.Format("2006-01-02")
+	if s.state.DailyStats[day] > 0 {
+		s.state.DailyStats[day]--
+	}
+
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return &last, nil
+}
+
+func (s *Store) Settings() Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Settings
+}
+
+func (s *Store) UpdateSettings(ns Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Settings = ns
+	return s.saveLocked()
+}
+
+func (s *Store) DailyCount(day string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.DailyStats[day]
+}
+
+// Counts returns (unsorted, kept, unsure, trashed).
+func (s *Store) Counts() (int, int, int, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var u, k, m, t int
+	for _, p := range s.state.Photos {
+		switch p.State {
+		case StateUnsorted:
+			u++
+		case StateKept:
+			k++
+		case StateUnsure:
+			m++
+		case StateTrashed:
+			t++
+		}
+	}
+	return u, k, m, t
+}
+
+func randID() (string, error) {
+	b := make([]byte, 9)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}

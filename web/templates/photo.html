@@ -1,0 +1,20 @@
+{{define "content"}}
+<div id="photo-area" class="photo-area">
+  {{template "card" .}}
+</div>
+<div class="actions">
+  <button class="action trash" data-action="trash" type="button" aria-label="Trash (←)">
+    <span class="glyph">✕</span><span class="label">Trash</span>
+  </button>
+  <button class="action unsure" data-action="unsure" type="button" aria-label="Unsure (↑)">
+    <span class="glyph">?</span><span class="label">Unsure</span>
+  </button>
+  <button class="action undo" data-action="undo" type="button" aria-label="Undo (Z)">
+    <span class="glyph">⤺</span><span class="label">Undo</span>
+  </button>
+  <button class="action keep" data-action="keep" type="button" aria-label="Keep (→)">
+    <span class="glyph">✓</span><span class="label">Keep</span>
+  </button>
+</div>
+<p class="kbd-hint">← trash · ↑ unsure · → keep · z undo · hold/click to zoom</p>
+{{end}}

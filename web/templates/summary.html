@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="summary">
+  <h1>Session complete</h1>
+  <p class="summary-stat"><strong>{{.Done}}</strong> decisions in this session</p>
+  <ul class="summary-list">
+    <li><strong>{{.Counts.Kept}}</strong> kept (total)</li>
+    <li><strong>{{.Counts.Unsure}}</strong> unsure (total)</li>
+    <li><strong>{{.Counts.Trashed}}</strong> trashed (total)</li>
+    <li><strong>{{.Counts.Unsorted}}</strong> still unsorted</li>
+  </ul>
+  {{if .ShowFatigueNudge}}<p class="nudge">You've made {{.TodayCount}} decisions today — consider taking a break.</p>{{end}}
+  <div class="summary-actions">
+    <form method="POST" action="/session/extend" style="display:inline">
+      <input type="hidden" name="delta" value="25">
+      <button type="submit">Continue +25</button>
+    </form>
+    <form method="POST" action="/session/extend" style="display:inline">
+      <input type="hidden" name="delta" value="50">
+      <button type="submit">Continue +50</button>
+    </form>
+    <form method="POST" action="/session/end" style="display:inline">
+      <button type="submit" class="primary">Done</button>
+    </form>
+  </div>
+</div>
+{{end}}

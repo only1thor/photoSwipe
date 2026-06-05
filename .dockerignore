@@ -1,0 +1,14 @@
+.git
+.gitignore
+.envrc
+.direnv
+.go
+flake.nix
+flake.lock
+compose.yaml
+Dockerfile
+.dockerignore
+README.md
+scripts
+docs
+**/*.md

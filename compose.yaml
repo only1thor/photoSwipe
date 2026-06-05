@@ -1,0 +1,23 @@
+services:
+  photoswipe:
+    build: .
+    image: photoswipe:latest
+    container_name: photoswipe
+    # bind to LAN only — adjust as needed
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      # required: shared password (min 6 chars)
+      PHOTOSWIPE_PASSWORD: "${PHOTOSWIPE_PASSWORD:?set PHOTOSWIPE_PASSWORD in your env or .env file}"
+      PHOTOSWIPE_PHOTO_DIR: "/photos"
+      PHOTOSWIPE_ADDR: ":8080"
+    volumes:
+      # mount your photo collection here; .trash/ will be created inside
+      - "${PHOTOSWIPE_PHOTOS_PATH:-./photos}:/photos:rw"
+    user: "${UID:-1000}:${GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+/.go/
+/.direnv/
+/photoSwipe
+/photos/
+/result
+*.test
+*.out
+.DS_Store

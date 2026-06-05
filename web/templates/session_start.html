@@ -1,0 +1,41 @@
+{{define "content"}}
+<div class="session-start">
+  <h1>New session</h1>
+  <p class="hint">
+    <strong>{{.Counts.Unsorted}}</strong> unsorted ·
+    <strong>{{.Counts.Kept}}</strong> kept ·
+    <strong>{{.Counts.Unsure}}</strong> unsure ·
+    <strong>{{.Counts.Trashed}}</strong> trashed
+  </p>
+  <form method="POST" action="/session/start">
+    <fieldset>
+      <legend>How many photos?</legend>
+      <div class="chips" role="radiogroup">
+        <label class="chip"><input type="radio" name="target" value="10">10</label>
+        <label class="chip"><input type="radio" name="target" value="25">25</label>
+        <label class="chip"><input type="radio" name="target" value="50" checked>50</label>
+        <label class="chip"><input type="radio" name="target" value="100">100</label>
+        <label class="chip"><input type="radio" name="target" value="0">∞ open-ended</label>
+      </div>
+      <label class="custom">
+        <span>or custom</span>
+        <input type="number" name="target_custom" min="1" max="9999" placeholder="—">
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>Mix</legend>
+      <div class="chips" role="radiogroup">
+        <label class="chip"><input type="radio" name="mix" value="all_new">100% new</label>
+        <label class="chip"><input type="radio" name="mix" value="mixed" checked>Mixed</label>
+        <label class="chip"><input type="radio" name="mix" value="heavy_review">Heavy review</label>
+        <label class="chip"><input type="radio" name="mix" value="review_only">Review only</label>
+      </div>
+    </fieldset>
+    <button type="submit" class="primary">Start</button>
+  </form>
+  <p class="rescan-row">
+    <button type="button" hx-post="/rescan" hx-target="#rescan-status" hx-swap="innerHTML">Rescan photos directory</button>
+    <span id="rescan-status"></span>
+  </p>
+</div>
+{{end}}

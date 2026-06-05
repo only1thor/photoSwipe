@@ -1,0 +1,41 @@
+{{define "content"}}
+<div class="settings">
+  <h1>Settings</h1>
+  <form method="POST" action="/settings">
+    <fieldset>
+      <legend>Resurface algorithm</legend>
+      <label>Base rate
+        <input type="number" name="base_rate" min="0" max="1" step="0.01" value="{{.Settings.BaseRate}}">
+        <small>Initial weight for a kept photo vs. an unsorted one (0–1).</small>
+      </label>
+      <label>Decay
+        <input type="number" name="decay" min="0" max="1" step="0.05" value="{{.Settings.Decay}}">
+        <small>Per-keep multiplier — lower means resurface fades faster.</small>
+      </label>
+      <label>Unsure base rate
+        <input type="number" name="unsure_base_rate" min="0" max="2" step="0.05" value="{{.Settings.UnsureBaseRate}}">
+        <small>Weight for unsure photos (typically higher than kept).</small>
+      </label>
+      <label>Cooldown (hours)
+        <input type="number" name="cooldown_hours" min="0" max="168" step="0.5" value="{{.Settings.CooldownHours}}">
+        <small>Time before a decided photo can resurface.</small>
+      </label>
+      <label>Lock threshold
+        <input type="number" name="lock_threshold" min="0" max="20" step="1" value="{{.Settings.LockThreshold}}">
+        <small>0 = no auto-lock. N = photo stops resurfacing after N keeps.</small>
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>Fatigue nudge</legend>
+      <label class="check">
+        <input type="checkbox" name="fatigue_nudge" {{if .Settings.FatigueNudge}}checked{{end}}>
+        Show a break suggestion after many decisions in one day
+      </label>
+      <label>Threshold
+        <input type="number" name="fatigue_threshold" min="10" max="1000" step="10" value="{{.Settings.FatigueThreshold}}">
+      </label>
+    </fieldset>
+    <button type="submit" class="primary">Save</button>
+  </form>
+</div>
+{{end}}

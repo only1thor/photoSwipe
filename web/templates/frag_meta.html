@@ -1,0 +1,6 @@
+{{define "meta"}}
+<span class="path" title="{{.Path}}">{{.PathShort}}</span>
+{{if and (gt .Width 0) (gt .Height 0)}}<span class="dims">{{.Width}}×{{.Height}}</span>{{end}}
+<span class="size">{{.SizeKB}} KB</span>
+<span class="mtime">{{.ModTime}}</span>
+{{end}}
