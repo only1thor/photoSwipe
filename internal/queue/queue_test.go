@@ -126,3 +126,23 @@ func TestNext_NoCandidate(t *testing.T) {
 		t.Fatalf("expected ErrNoCandidate, got %v", err)
 	}
 }
+
+func TestNext_ExcludesRecentlySkipped(t *testing.T) {
+	now := time.Now()
+	sel := New()
+	photos := []*store.Photo{
+		mkPhoto("a", store.StateUnsorted, 0, 0, 0),
+		mkPhoto("b", store.StateUnsorted, 0, 0, 0),
+	}
+	sess := &store.Session{Mix: store.MixMixed, RecentlySkipped: []string{"a"}}
+	settings := store.DefaultSettings()
+	for i := 0; i < 30; i++ {
+		got, err := sel.Next(photos, sess, settings, now)
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if got.ID == "a" {
+			t.Fatalf("recently-skipped photo was returned")
+		}
+	}
+}
