@@ -84,14 +84,14 @@ want decision history to survive a wipe.
 
 ## Roadmap
 
-Intentionally out of scope for v1 (each would add either a C dependency or
-a substantial pure-Go surface — open an issue if you want them):
-
-- HEIC/HEIF (needs libheif)
-- Full EXIF parsing & orientation-aware thumbnails
-- Near-duplicate clustering (perceptual hashing)
-- Multi-user accounts
-- Trashed-photo grid review before the move (we trash immediately by design)
+See [`docs/roadmap.md`](docs/roadmap.md) for the full list with cost
+sketches and rationale. The short version: EXIF orientation +
+DateTimeOriginal, a trash browse/restore page, background thumb prewarm,
+and an in-session "you've kept similar photos" hint are the most likely
+next pieces. HEIC, multi-user, and a JSON API are documented but lower
+priority. Near-duplicate clustering with perceptual hashing was on this
+list and shipped — see [`docs/architecture.md`](docs/architecture.md)
+for the algorithm.
 
 ## Docs
 
@@ -101,6 +101,8 @@ a substantial pure-Go surface — open an issue if you want them):
   Docker, systemd), backups, troubleshooting.
 - [`docs/updating.md`](docs/updating.md) — how to bump htmx, Go, the one
   dep, the container, and the on-disk state schema.
+- [`docs/roadmap.md`](docs/roadmap.md) — what's deferred to v2 and why,
+  with rough cost sketches for each item.
 
 ## Layout
 

@@ -2,6 +2,7 @@
 /.direnv/
 /photoSwipe
 /photos/
+/test_assets
 /result
 *.test
 *.out

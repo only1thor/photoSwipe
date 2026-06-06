@@ -321,11 +321,11 @@ templates are embedded into the binary via `//go:embed all:web` in
 | State writes    | `*.tmp` + atomic rename                                                    |
 | Concurrency     | `sync.RWMutex` on the store; queue's PRNG protected by its own mutex       |
 
-See [`security.md`](#) — TODO — for the full threat model. The headline
-non-mitigation: this is a single-user, password-gated webapp intended for
-LAN use. It is not hardened against a logged-in attacker abusing decision
-endpoints, nor against an OS-level adversary with access to the photos
-directory.
+**Headline non-mitigation**: this is a single-user, password-gated
+webapp intended for LAN use. It is not hardened against a logged-in
+attacker abusing decision endpoints, nor against an OS-level adversary
+with access to the photos directory. Multi-user accounts and a
+reverse-proxy trust mode are listed in [`roadmap.md`](roadmap.md).
 
 ## Build & deployment shape
 
