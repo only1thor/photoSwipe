@@ -16,21 +16,30 @@
       {{if gt (len .Photos) 0}}
       <img class="stack-front" src="/thumb/{{(index .Photos 0).ID}}?w=800" alt="" draggable="false">
       {{end}}
-      <span class="stack-count">{{len .Photos}}</span>
-      <span class="stack-hint">tap or → to pick keepers · ← to trash all</span>
+      <div class="stack-badge" aria-label="{{len .Photos}} similar photos">
+        <span class="stack-num">{{len .Photos}}</span>
+        <svg class="stack-icon" viewBox="0 0 24 20" aria-hidden="true">
+          <rect x="6" y="1" width="14" height="11" rx="2" fill="rgba(255,255,255,0.45)" stroke="rgba(255,255,255,0.75)" stroke-width="1"/>
+          <rect x="3" y="4" width="14" height="11" rx="2" fill="rgba(255,255,255,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="1"/>
+          <rect x="0" y="7" width="14" height="11" rx="2" fill="white" stroke="white" stroke-width="1"/>
+        </svg>
+      </div>
+      <span class="stack-hint">tap or → to pick · ← to trash all</span>
     </div>
 
     {{/* Expanded grid view — tap a thumb's corner ✓ to keep it, leave
          unchecked to trash. Tap-and-hold a thumb to zoom. */}}
     <div class="grid-face">
-      <p class="grid-hint">Tick the ones to keep. Long-press to zoom.</p>
+      <p class="grid-hint">Tap a photo to zoom · tap the ✓ to keep · tap again to dismiss zoom</p>
       <div class="cluster-grid">
         {{range .Photos}}
-        <label class="cluster-thumb">
-          <input type="checkbox" name="keep" value="{{.ID}}">
+        <div class="cluster-thumb" data-photo-id="{{.ID}}">
           <img src="/thumb/{{.ID}}?w=400" alt="" loading="lazy" draggable="false">
-          <span class="check-corner" aria-hidden="true">✓</span>
-        </label>
+          <label class="check-corner" title="keep this one">
+            <input type="checkbox" name="keep" value="{{.ID}}">
+            <span aria-hidden="true">✓</span>
+          </label>
+        </div>
         {{end}}
       </div>
       <div class="cluster-actions">

@@ -364,7 +364,10 @@ func (s *Store) EndSession() error {
 	return s.saveLocked()
 }
 
-// SessionExtend bumps the session target by delta. delta=0 leaves it open-ended.
+// SessionExtend bumps the session target by delta. delta=0 leaves it
+// open-ended. The per-batch skip-cooldown FIFO (RecentlySkipped) is
+// cleared so the next batch can resurface anything the user skipped in
+// the previous one.
 func (s *Store) SessionExtend(delta int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -376,6 +379,7 @@ func (s *Store) SessionExtend(delta int) error {
 	} else if s.state.Session.Target > 0 {
 		s.state.Session.Target += delta
 	}
+	s.state.Session.RecentlySkipped = nil
 	return s.saveLocked()
 }
 

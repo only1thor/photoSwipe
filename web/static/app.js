@@ -3,7 +3,7 @@
 
   const SWIPE_DIST = 80;       // px threshold
   const SWIPE_VELOCITY = 0.4;  // px/ms threshold for "flick"
-  const HOLD_MS = 350;         // long-press to zoom
+  const TAP_SLOP = 10;         // px movement still counts as a tap
 
   function currentCard() {
     return document.querySelector('#photo-area .card[data-photo-id]');
@@ -14,13 +14,8 @@
   function clusterIsExpanded(card) {
     return card && card.classList.contains('expanded');
   }
-  function isSingleCard() {
-    return !!currentCard();
-  }
 
   function decide(action) {
-    // On a cluster card, keep/trash/skip have stack-specific semantics
-    // handled in handleClusterAction; never POST a per-photo decision.
     const cluster = currentClusterCard();
     if (cluster) { handleClusterAction(action, cluster); return; }
     const id = currentCard()?.dataset.photoId;
@@ -36,26 +31,26 @@
     htmx.ajax('POST', '/undo', { target: '#photo-area', swap: 'innerHTML' });
   }
 
-  // Cluster: collapsed stack reacts to keep/trash/skip; expanded grid
-  // only honors "undo" (the user uses Apply / Skip cluster / corner-ticks).
   function handleClusterAction(action, card) {
     const form = card.querySelector('form');
     if (!form) return;
     if (!clusterIsExpanded(card)) {
       if (action === 'keep') { card.classList.add('expanded'); return; }
-      if (action === 'trash') {
-        // No keep[] selected; server trashes the whole set.
-        form.requestSubmit();
-        return;
-      }
+      if (action === 'trash') { form.requestSubmit(); return; }
       if (action === 'skip') {
         const btn = form.querySelector('button[name="action"][value="skip"]');
         if (btn) btn.click();
         return;
       }
     }
-    // Expanded: per-photo buttons are inert. Apply / Skip cluster live in
-    // the grid itself.
+    // Expanded: per-photo buttons are inert; user uses Apply / Skip.
+  }
+
+  // Zoom is "tap to enter, tap to exit". For single-photo cards we toggle
+  // .zoomed on the card; for cluster thumbs we toggle it on the .cluster-thumb.
+  function zoomElement(el) {
+    if (!el) return;
+    el.classList.toggle('zoomed');
   }
 
   // --- keyboard ---
@@ -72,11 +67,14 @@
       case 'z': case 'Z':
         e.preventDefault(); undo(); break;
       case ' ':
-        toggleZoom(); e.preventDefault(); break;
+        e.preventDefault(); zoomElement(currentCard()); break;
+      case 'Escape':
+        document.querySelectorAll('.zoomed').forEach(el => el.classList.remove('zoomed'));
+        break;
     }
   });
 
-  // --- buttons (event delegation) ---
+  // --- buttons + info-toggle ---
   document.addEventListener('click', function(e) {
     const infoBtn = e.target.closest('[data-info-toggle]');
     if (infoBtn) {
@@ -84,12 +82,9 @@
       if (card) {
         const show = !card.classList.contains('show-info');
         card.classList.toggle('show-info', show);
-        // Lazy-trigger htmx meta load the first time the panel opens.
         if (show) {
           const panel = card.querySelector('.card-meta.panel');
-          if (panel && typeof htmx !== 'undefined') {
-            htmx.trigger(panel, 'info-show');
-          }
+          if (panel && typeof htmx !== 'undefined') htmx.trigger(panel, 'info-show');
         }
       }
       return;
@@ -100,46 +95,39 @@
     if (action === 'undo') undo(); else decide(action);
   });
 
-  // --- zoom (tap-and-hold / spacebar) ---
-  function toggleZoom() {
-    const c = currentCard();
-    if (!c) return;
-    c.classList.toggle('zoomed');
-  }
-  let holdTimer = null;
-  let holdTarget = null;
-  document.addEventListener('pointerdown', function(e) {
-    // Long-press on a single photo card: zoom the card.
-    // Long-press on a cluster thumbnail (in expanded grid): zoom that thumb.
-    const thumb = e.target.closest('.cluster-thumb');
-    const card = e.target.closest('.card');
-    if (!card) return;
-    holdTarget = thumb || card;
-    holdTimer = setTimeout(function() {
-      holdTarget.classList.toggle('zoomed');
-      holdTimer = null;
-    }, HOLD_MS);
-  });
-  document.addEventListener('pointerup', cancelHold);
-  document.addEventListener('pointercancel', cancelHold);
-  document.addEventListener('pointerleave', cancelHold);
-  function cancelHold() {
-    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-  }
-  // Tap-once on a zoomed thumb unzooms it (so users can exit without
-  // having to hold again).
+  // --- click-to-zoom on cluster thumbs (separate from the corner check) ---
   document.addEventListener('click', function(e) {
-    const z = e.target.closest('.cluster-thumb.zoomed');
-    if (z) { z.classList.remove('zoomed'); e.preventDefault(); }
-  }, true);
+    // First: tap on a zoomed cluster thumb exits zoom.
+    const zoomed = e.target.closest('.cluster-thumb.zoomed');
+    if (zoomed) {
+      // If the user actually tapped the corner check inside zoom, let the
+      // checkbox toggle normally and don't exit.
+      if (!e.target.closest('.check-corner')) {
+        zoomed.classList.remove('zoomed');
+        e.preventDefault();
+      }
+      return;
+    }
+    // Then: tap on a non-zoomed cluster thumb (anywhere except the corner)
+    // enters zoom.
+    const thumb = e.target.closest('.cluster-thumb');
+    if (thumb && !e.target.closest('.check-corner')) {
+      thumb.classList.add('zoomed');
+      e.preventDefault();
+    }
+  });
 
-  // --- touch/mouse drag for swipe ---
+  // --- touch/mouse drag for swipe; tap-with-no-movement = zoom toggle on single cards ---
   let drag = null;
   function startDrag(e) {
+    // Never start a drag from form controls, buttons, labels, or the info icon.
+    if (e.target.closest('input, button, label, [data-info-toggle], .check-corner')) return;
     const card = e.target.closest('.card');
-    if (!card || card.classList.contains('zoomed')) return;
-    // No swipe gestures inside an expanded cluster grid.
+    if (!card) return;
+    // No swipes inside an expanded cluster grid; the grid scrolls / taps.
     if (card.dataset.cardKind === 'cluster' && card.classList.contains('expanded')) return;
+    // No swipes on a zoomed card either (let the user pan/pinch).
+    if (card.classList.contains('zoomed')) return;
     const point = e.touches ? e.touches[0] : e;
     drag = {
       card: card,
@@ -152,6 +140,7 @@
     const point = e.touches ? e.touches[0] : e;
     const dx = point.clientX - drag.x0;
     const dy = point.clientY - drag.y0;
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return; // ignore noise
     drag.card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx * 0.04}deg)`;
     drag.card.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
     const absX = Math.abs(dx), absY = Math.abs(dy);
@@ -170,6 +159,8 @@
     const dt = performance.now() - drag.t0;
     const absX = Math.abs(dx), absY = Math.abs(dy);
     const vel = Math.max(absX, absY) / Math.max(dt, 1);
+    const c = drag.card;
+    const isCluster = c.dataset.cardKind === 'cluster';
 
     let action = null;
     if (absX > absY) {
@@ -179,10 +170,22 @@
       if (dy < -SWIPE_DIST || (dy < -30 && vel > SWIPE_VELOCITY)) action = 'skip';
     }
 
-    const c = drag.card;
-    const isCluster = c.dataset.cardKind === 'cluster';
+    // Pure tap (no swipe + barely moved) → toggle zoom. Cluster collapsed
+    // stack: tap expands the grid instead.
+    if (!action && absX < TAP_SLOP && absY < TAP_SLOP) {
+      c.style.transition = '';
+      c.style.transform = '';
+      c.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
+      if (isCluster && !c.classList.contains('expanded')) {
+        c.classList.add('expanded');
+      } else if (!isCluster) {
+        c.classList.toggle('zoomed');
+      }
+      drag = null;
+      return;
+    }
+
     if (action) {
-      // For cluster "keep", we expand in place — no fly-off animation.
       if (isCluster && action === 'keep') {
         c.style.transition = 'transform 0.15s ease-out';
         c.style.transform = '';
@@ -208,25 +211,11 @@
   document.addEventListener('touchstart', startDrag, { passive: true });
   document.addEventListener('touchmove', moveDrag, { passive: true });
   document.addEventListener('touchend', endDrag, { passive: true });
-
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     if (!e.target.closest('#photo-area')) return;
-    // Don't start a drag on form controls or the info button.
-    if (e.target.closest('input, button, label')) return;
     startDrag(e);
   });
   document.addEventListener('mousemove', function(e) { if (drag) moveDrag(e); });
   document.addEventListener('mouseup', function(e) { if (drag) endDrag(e); });
-
-  // Tap-to-expand on the collapsed stack (separate from the long-press
-  // zoom: a quick tap = expand, a sustained press = zoom the front photo).
-  document.addEventListener('click', function(e) {
-    const cluster = e.target.closest('.card.cluster');
-    if (!cluster || cluster.classList.contains('expanded')) return;
-    // Ignore if the user was just dragging (handled in endDrag).
-    if (e.target.closest('input, button, label, .stack-count, .stack-hint')) return;
-    if (!e.target.closest('.stack-face')) return;
-    cluster.classList.add('expanded');
-  });
 })();

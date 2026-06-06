@@ -266,10 +266,25 @@ button.primary, .session-start button[type="submit"] {
   max-height: none;
   border-radius: 0;
   z-index: 50;
+  background: rgba(0,0,0,0.96);
 }
 .card.zoomed img {
   max-width: 100vw;
   max-height: 100vh;
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+}
+.card.zoomed::after {
+  content: 'tap to dismiss · pinch to zoom';
+  position: fixed;
+  bottom: 16px;
+  left: 0; right: 0;
+  text-align: center;
+  color: rgba(255,255,255,0.7);
+  font-size: 0.85rem;
+  pointer-events: none;
+  z-index: 55;
 }
 
 .actions {
@@ -611,12 +626,14 @@ button.primary, .session-start button[type="submit"] {
   position: absolute;
   inset: 0;
   border-radius: 12px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  background: #2a2f3a;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
 }
 /* Use higher specificity than `.card img` so the stack front fills the
-   stack-face instead of being constrained by the single-photo rules. */
+   stack-face instead of being constrained by the single-photo rules.
+   The slight rotation makes it read as a tilted photo on a stack rather
+   than a centered single-photo card. */
 .card.cluster .stack-front {
   z-index: 3;
   width: 100%;
@@ -624,31 +641,41 @@ button.primary, .session-start button[type="submit"] {
   max-width: none;
   max-height: none;
   object-fit: cover;
+  transform: rotate(-2deg);
+  transform-origin: 50% 60%;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.25);
 }
 .stack-layer.mid {
   z-index: 2;
-  transform: translate(8px, 6px) rotate(2deg);
-  background: var(--bg-elev);
+  transform: translate(12px, 10px) rotate(3deg);
+  background: #3a4150;
+  border-color: rgba(255,255,255,0.28);
 }
 .stack-layer.back {
   z-index: 1;
-  transform: translate(16px, 12px) rotate(4deg);
-  background: var(--bg-elev);
-  opacity: 0.85;
+  transform: translate(22px, 18px) rotate(6deg);
+  background: #2e3340;
+  border-color: rgba(255,255,255,0.22);
 }
-.stack-count {
+.stack-badge {
   position: absolute;
-  bottom: 12px;
-  left: 12px;
+  bottom: 14px;
+  left: 14px;
   z-index: 4;
-  padding: 0.3rem 0.7rem;
-  border-radius: 999px;
-  background: rgba(0,0,0,0.65);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0.4rem 0.7rem 0.5rem;
+  border-radius: 14px;
+  background: rgba(0,0,0,0.72);
   color: #fff;
-  font-weight: 600;
-  font-size: 1rem;
-  letter-spacing: 0.5px;
+  font-weight: 700;
+  backdrop-filter: blur(6px);
 }
+.stack-num { font-size: 1.15rem; line-height: 1; letter-spacing: 0.5px; }
+.stack-icon { width: 22px; height: 18px; display: block; }
 .stack-hint {
   position: absolute;
   bottom: 12px;
@@ -680,35 +707,71 @@ button.primary, .session-start button[type="submit"] {
   transition: transform 0.18s ease;
 }
 .cluster-thumb img { width: 100%; height: 140px; object-fit: cover; display: block; transition: filter 0.15s; }
-.cluster-thumb input { position: absolute; opacity: 0; pointer-events: none; }
 .cluster-thumb .check-corner {
   position: absolute;
   top: 6px;
   right: 6px;
-  width: 28px; height: 28px;
+  z-index: 5;
+  width: 32px; height: 32px;
   border-radius: 999px;
-  background: rgba(0,0,0,0.55);
-  color: rgba(255,255,255,0.25);
+  background: rgba(0,0,0,0.6);
+  color: rgba(255,255,255,0.35);
   font-weight: 700;
   display: grid; place-items: center;
-  font-size: 0.9rem;
-  pointer-events: none;
+  font-size: 1rem;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+.cluster-thumb .check-corner input {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  margin: 0;
 }
 .cluster-thumb:has(input:checked) { border-color: var(--keep, #4ade80); }
+.cluster-thumb:has(input:checked) .check-corner {
+  background: var(--keep, #4ade80);
+  color: white;
+  border-color: var(--keep, #4ade80);
+}
 .cluster-thumb:has(input:checked) img { filter: none; }
-.cluster-thumb:has(input:checked) .check-corner { background: var(--keep, #4ade80); color: white; }
-.cluster-thumb:not(:has(input:checked)) img { filter: brightness(0.55) saturate(0.7); }
+/* Dim only the unchecked AND non-zoomed thumbs. Zoomed always wins. */
+.cluster-thumb:not(:has(input:checked)):not(.zoomed) img {
+  filter: brightness(0.6) saturate(0.75);
+}
 
 .cluster-thumb.zoomed {
   position: fixed;
   inset: 0;
   z-index: 200;
   border-radius: 0;
-  background: rgba(0,0,0,0.95);
+  background: rgba(0,0,0,0.96);
   display: grid;
   place-items: center;
+  border: none;
 }
-.cluster-thumb.zoomed img { width: 100vw; height: 100vh; object-fit: contain; filter: none; }
+.cluster-thumb.zoomed img {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  filter: none !important;
+}
+.cluster-thumb.zoomed .check-corner {
+  top: 16px;
+  right: 16px;
+}
+.cluster-thumb.zoomed::after {
+  content: 'tap to dismiss';
+  position: fixed;
+  bottom: 16px;
+  left: 0; right: 0;
+  text-align: center;
+  color: rgba(255,255,255,0.7);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
 
 /* --- i-icon meta UX on single-photo cards --- */
 .info-toggle {

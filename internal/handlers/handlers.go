@@ -276,10 +276,49 @@ func (h *handler) handleNext(w http.ResponseWriter, r *http.Request) {
 	h.renderNext(w)
 }
 
+// renderForPhoto renders the swipe view for a specific photo — either as
+// a single card or, if the photo is part of an unresolved cluster, as
+// the cluster fragment. Used by handleUndo so undo brings back the photo
+// the user just acted on, not a fresh weighted-random pick.
+func (h *handler) renderForPhoto(w http.ResponseWriter, p *store.Photo) {
+	settings := h.deps.Store.Settings()
+	if cluster := h.openClusterFor(p); cluster != nil {
+		h.renderFragment(w, h.tplCluster, "cluster", pageData{
+			ClusterID: cluster.ID,
+			Photos:    clusterMembers(cluster),
+			Settings:  settings,
+		})
+		return
+	}
+	h.renderFragment(w, h.tplCard, "card", pageData{Photo: p, Settings: settings})
+}
+
+// renderClusterByID renders the cluster fragment for the cluster whose
+// ID matches. Used by undo of a cluster decision so the same cluster
+// (now reformed after the trash-undo) is presented for redecision.
+// Returns false if no such cluster exists right now.
+func (h *handler) renderClusterByID(w http.ResponseWriter, id string) bool {
+	settings := h.deps.Store.Settings()
+	window := time.Duration(settings.DupeTimeWindowHours * float64(time.Hour))
+	clusters := dupes.Find(h.deps.Store.AllPhotos(), settings.DupeThreshold, window)
+	for i := range clusters {
+		if clusters[i].ID != id {
+			continue
+		}
+		h.renderFragment(w, h.tplCluster, "cluster", pageData{
+			ClusterID: clusters[i].ID,
+			Photos:    clusterMembers(&clusters[i]),
+			Settings:  settings,
+		})
+		return true
+	}
+	return false
+}
+
 // renderNext picks the next photo and writes either the single-photo card
 // fragment or, if the picked photo is part of an unresolved cluster, the
-// cluster card fragment. Used by handleNext, handleDecision, handleUndo,
-// and handleClusterResolve when they need to swap #photo-area.
+// cluster card fragment. Used by handleNext, handleDecision, and
+// handleClusterResolve when they need to swap #photo-area.
 func (h *handler) renderNext(w http.ResponseWriter) {
 	sess := h.deps.Store.Session()
 	if sess == nil || sess.Complete() {
@@ -373,9 +412,11 @@ func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	w.Header().Set("HX-Trigger", "session-updated")
 	switch {
 	case d.Cluster != nil:
-		// Restore every trashed member's file.
+		// Restore every trashed member's file, then re-render the cluster
+		// so the user can redo the decision on the same group.
 		for _, op := range d.Cluster {
 			if op.NewState == store.StateTrashed && op.TrashTo != "" && op.TrashFrom != "" {
 				if err := img.RestoreFromTrash(op.TrashTo, op.TrashFrom); err != nil {
@@ -383,17 +424,29 @@ func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// d.PhotoID was the cluster ID at apply time. Try to find it again.
+		if !h.renderClusterByID(w, d.PhotoID) {
+			h.renderNext(w)
+		}
 	case d.Skipped:
-		// Nothing to do on the filesystem.
+		// Show the just-unskipped photo (now back in the pool, no file move).
+		if p, ok := h.deps.Store.GetPhoto(d.PhotoID); ok {
+			h.renderForPhoto(w, p)
+			return
+		}
+		h.renderNext(w)
 	default:
 		if d.NewState == store.StateTrashed && d.TrashTo != "" && d.TrashFrom != "" {
 			if err := img.RestoreFromTrash(d.TrashTo, d.TrashFrom); err != nil {
 				log.Printf("restore failed: %v", err)
 			}
 		}
+		if p, ok := h.deps.Store.GetPhoto(d.PhotoID); ok {
+			h.renderForPhoto(w, p)
+			return
+		}
+		h.renderNext(w)
 	}
-	w.Header().Set("HX-Trigger", "session-updated")
-	h.renderNext(w)
 }
 
 func (h *handler) handleServePhoto(w http.ResponseWriter, r *http.Request) {
