@@ -21,11 +21,12 @@ const (
 
 // rootState is the on-disk JSON layout.
 type rootState struct {
-	Version    int               `json:"version"`
-	Photos     map[string]*Photo `json:"photos"`
-	Session    *Session          `json:"session,omitempty"`
-	Settings   Settings          `json:"settings"`
-	DailyStats map[string]int    `json:"daily_stats"`
+	Version       int               `json:"version"`
+	Photos        map[string]*Photo `json:"photos"`
+	Session       *Session          `json:"session,omitempty"`
+	Settings      Settings          `json:"settings"`
+	DailyStats    map[string]int    `json:"daily_stats"`
+	LastBatchDone int               `json:"last_batch_done,omitempty"`
 }
 
 type Store struct {
@@ -357,11 +358,26 @@ func (s *Store) AutoStartSession() (*Session, error) {
 	return s.StartSession(target, mix)
 }
 
+// EndSession terminates the current session and remembers how many
+// decisions it contained, so the /stats page that follows the redirect
+// can show "you sorted N in that batch" even though the live Session is
+// gone.
 func (s *Store) EndSession() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.state.Session != nil {
+		s.state.LastBatchDone = s.state.Session.Done
+	}
 	s.state.Session = nil
 	return s.saveLocked()
+}
+
+// LastBatchDone returns the Done count of the most recently ended
+// session (zero if none).
+func (s *Store) LastBatchDone() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.LastBatchDone
 }
 
 // SessionExtend bumps the session target by delta. delta=0 leaves it

@@ -22,8 +22,10 @@
     <nav>
       {{if .Session}}
       <form method="post" action="/session/end" class="inline-form">
-        <button type="submit" class="link-btn" title="end this batch">finish sort</button>
+        <button type="submit" class="nav-btn finish" title="end this batch and see stats">Finish sort</button>
       </form>
+      {{else if eq .BodyClass "stats-body"}}
+      <a href="/" class="nav-btn primary" title="start a new batch">New session</a>
       {{end}}
       <a href="/settings" class="gear" title="settings" aria-label="settings">⚙</a>
       <a href="/logout" title="log out">logout</a>

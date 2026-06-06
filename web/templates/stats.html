@@ -1,0 +1,45 @@
+{{define "content"}}
+<div class="stats">
+  <h1>{{if gt .LastBatchDone 0}}Batch done · {{.LastBatchDone}} decisions{{else}}Stats{{end}}</h1>
+  <p class="encouragement">{{.Encouragement}}</p>
+
+  <section class="stat-grid">
+    <div class="stat">
+      <span class="stat-num">{{.TodayCount}}</span>
+      <span class="stat-label">today</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">{{.WeekCount}}</span>
+      <span class="stat-label">past 7 days</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">{{.Counts.Kept}}</span>
+      <span class="stat-label">kept (all-time)</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">{{.Counts.Trashed}}</span>
+      <span class="stat-label">trashed (all-time)</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">{{.Counts.Unsorted}}</span>
+      <span class="stat-label">still to sort</span>
+    </div>
+  </section>
+
+  <section class="weekbars" aria-label="decisions per day, last 7 days">
+    <div class="weekbars-grid">
+      {{range .DailyBars}}
+      <div class="bar-col{{if .IsToday}} today{{end}}" title="{{.Day}}: {{.Count}}">
+        <div class="bar" style="height: {{.Height}}%"></div>
+        <span class="bar-day">{{.Day}}</span>
+      </div>
+      {{end}}
+    </div>
+  </section>
+
+  <div class="stats-actions">
+    <a href="/" class="primary btn">Start new batch</a>
+    <a href="/settings" class="btn">Settings</a>
+  </div>
+</div>
+{{end}}

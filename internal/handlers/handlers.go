@@ -38,6 +38,7 @@ type handler struct {
 	tplPhoto    *template.Template
 	tplSummary  *template.Template
 	tplSettings *template.Template
+	tplStats    *template.Template
 	tplCard     *template.Template
 	tplCluster  *template.Template
 	tplMeta     *template.Template
@@ -79,6 +80,7 @@ func New(d Deps) (http.Handler, error) {
 	mux.HandleFunc("GET /meta/{id}", h.handleMeta)
 	mux.HandleFunc("GET /settings", h.handleSettings)
 	mux.HandleFunc("POST /settings", h.handleUpdateSettings)
+	mux.HandleFunc("GET /stats", h.handleStats)
 	mux.HandleFunc("POST /rescan", h.handleRescan)
 
 	return h.auth.Middleware(mux), nil
@@ -134,6 +136,9 @@ func (h *handler) loadTemplates() error {
 	if h.tplSettings, err = makePage("settings.html"); err != nil {
 		return err
 	}
+	if h.tplStats, err = makePage("stats.html"); err != nil {
+		return err
+	}
 	if h.tplCard, err = makeFragment("frag_card.html", "card"); err != nil {
 		return err
 	}
@@ -166,9 +171,23 @@ type pageData struct {
 	Indexed          int
 	Total            int
 
+	// Stats page
+	WeekCount     int
+	LastBatchDone int
+	Encouragement string
+	DailyBars     []DailyBar
+
 	// Cluster card fragment
 	ClusterID string
 	Photos    []ClusterMember
+}
+
+// DailyBar is one bar in the 7-day decision sparkline on /stats.
+type DailyBar struct {
+	Day    string // "Mon", "Tue", …
+	Count  int
+	Height int // 0–100, for CSS height %
+	IsToday bool
 }
 
 // ClusterMember is a view-model for one entry in the inline cluster grid.
@@ -253,7 +272,7 @@ func (h *handler) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/stats", http.StatusSeeOther)
 }
 
 func (h *handler) handleSessionExtend(w http.ResponseWriter, r *http.Request) {
@@ -549,6 +568,64 @@ func (h *handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
+
+func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	todayCount := h.deps.Store.DailyCount(today)
+	var weekCount int
+	bars := make([]DailyBar, 7)
+	var maxCount int
+	for i := 6; i >= 0; i-- {
+		d := now.AddDate(0, 0, -i)
+		key := d.Format("2006-01-02")
+		c := h.deps.Store.DailyCount(key)
+		weekCount += c
+		bars[6-i] = DailyBar{
+			Day:     d.Format("Mon"),
+			Count:   c,
+			IsToday: i == 0,
+		}
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	for i := range bars {
+		if maxCount > 0 {
+			bars[i].Height = bars[i].Count * 100 / maxCount
+		}
+	}
+	lastBatch := h.deps.Store.LastBatchDone()
+
+	h.renderPage(w, h.tplStats, pageData{
+		BodyClass:     "stats-body",
+		Counts:        h.counts(),
+		TodayCount:    todayCount,
+		WeekCount:     weekCount,
+		LastBatchDone: lastBatch,
+		DailyBars:     bars,
+		Encouragement: encouragementFor(lastBatch, todayCount),
+	})
+}
+
+// encouragementFor returns a short, varied affirming line. Kept here
+// rather than in the template so the template stays a clean view layer.
+func encouragementFor(batch, today int) string {
+	switch {
+	case batch == 0 && today == 0:
+		return "Nothing decided yet — fresh slate whenever you're ready."
+	case batch == 0:
+		return "Done for now. Come back any time."
+	case batch >= 50:
+		return "Big batch — that's real progress. Take a breather."
+	case batch >= 20:
+		return "Solid work. Your future self will thank you."
+	case batch >= 10:
+		return "Nice batch. Small steps, real progress."
+	default:
+		return "Every decision counts. Well done."
+	}
 }
 
 func (h *handler) handleRescan(w http.ResponseWriter, r *http.Request) {
