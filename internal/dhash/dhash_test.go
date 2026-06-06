@@ -37,11 +37,8 @@ func TestDistanceSelfIsZero(t *testing.T) {
 }
 
 func TestNearDuplicatesAreClose(t *testing.T) {
-	// Two slightly perturbed versions of the same image should have small
-	// Hamming distance.
 	a := gradient(160, 120)
 	b := gradient(160, 120)
-	// Perturb b: bump a single channel on a few pixels
 	for i := 0; i < 50; i++ {
 		x, y := i%160, i%120
 		c := b.RGBAAt(x, y)
@@ -50,8 +47,8 @@ func TestNearDuplicatesAreClose(t *testing.T) {
 	}
 	ha, hb := Compute(a), Compute(b)
 	d := Distance(ha, hb)
-	if d > 4 {
-		t.Fatalf("near-duplicate distance=%d, want <=4", d)
+	if d > 8 {
+		t.Fatalf("near-duplicate distance=%d, want <=8", d)
 	}
 }
 
@@ -59,17 +56,25 @@ func TestDifferentImagesAreFar(t *testing.T) {
 	a := noisy(120, 90, 1)
 	b := noisy(120, 90, 2)
 	d := Distance(Compute(a), Compute(b))
-	if d < 16 {
-		t.Fatalf("random noise distance=%d, want >=16 (likely unrelated)", d)
+	if d < 32 {
+		t.Fatalf("random noise distance=%d, want >=32 (likely unrelated)", d)
 	}
 }
 
 func TestDownscaleInvariance(t *testing.T) {
-	// The hash should be largely invariant to source resolution.
 	big := gradient(640, 480)
 	small := gradient(160, 120)
 	d := Distance(Compute(big), Compute(small))
-	if d > 2 {
-		t.Fatalf("resolution-invariant distance=%d, want <=2", d)
+	if d > 4 {
+		t.Fatalf("resolution-invariant distance=%d, want <=4", d)
+	}
+}
+
+func TestZero(t *testing.T) {
+	if !(Hash{}).Zero() {
+		t.Fatal("Hash{}.Zero() should be true")
+	}
+	if (Hash{H: 1}).Zero() {
+		t.Fatal("non-zero hash should not be Zero")
 	}
 }

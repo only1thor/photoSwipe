@@ -17,6 +17,8 @@ func mk(id string, dhash uint64, state store.PhotoState, size int64, t time.Time
 	}
 	if dhash != 0 {
 		p.DHash = dhash
+		// Leave DHashV at zero — tests below compare only the H plane.
+		p.HashVersion = store.CurrentHashVersion
 		p.DHashedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 	return p

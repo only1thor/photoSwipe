@@ -28,11 +28,16 @@ type Photo struct {
 	AddedAt        time.Time  `json:"added_at"`
 	TrashedPath    string     `json:"trashed_path,omitempty"`
 
-	// DHash is a perceptual fingerprint used for near-duplicate detection.
-	// 0 paired with a zero DHashedAt means "not yet computed"; a non-zero
-	// DHashedAt with DHash==0 means "computation failed, do not retry".
-	DHash     uint64    `json:"dhash,omitempty"`
-	DHashedAt time.Time `json:"dhashed_at,omitempty"`
+	// DHash / DHashV are the two halves of the combined horizontal+vertical
+	// difference-hash perceptual fingerprint (see internal/dhash). A zero
+	// DHashedAt means "not yet computed"; a non-zero DHashedAt with
+	// HashVersion below the current value means "hashed under an older
+	// algorithm — re-hash". Both planes zero with DHashedAt set means
+	// "computation failed, do not retry".
+	DHash       uint64    `json:"dhash,omitempty"`
+	DHashV      uint64    `json:"dhash_v,omitempty"`
+	HashVersion int       `json:"hash_version,omitempty"`
+	DHashedAt   time.Time `json:"dhashed_at,omitempty"`
 
 	// Time is the photo's capture time, used to restrict near-duplicate
 	// clustering to photos taken close together. Populated from file mtime

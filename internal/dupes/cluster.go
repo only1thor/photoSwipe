@@ -33,7 +33,10 @@ func Find(photos []*store.Photo, distanceThreshold int, timeWindow time.Duration
 		if p.State == store.StateTrashed {
 			continue
 		}
-		if p.DHashedAt.IsZero() || p.DHash == 0 {
+		if p.DHashedAt.IsZero() || p.HashVersion < store.CurrentHashVersion {
+			continue
+		}
+		if p.DHash == 0 && p.DHashV == 0 {
 			continue
 		}
 		hashed = append(hashed, p)
@@ -80,7 +83,9 @@ func Find(photos []*store.Photo, distanceThreshold int, timeWindow time.Duration
 					break // sorted by Time: further j's are even farther
 				}
 			}
-			if dhash.Distance(hashed[i].DHash, hashed[j].DHash) <= distanceThreshold {
+			ha := dhash.Hash{H: hashed[i].DHash, V: hashed[i].DHashV}
+			hb := dhash.Hash{H: hashed[j].DHash, V: hashed[j].DHashV}
+			if dhash.Distance(ha, hb) <= distanceThreshold {
 				union(hashed[i].ID, hashed[j].ID)
 			}
 		}

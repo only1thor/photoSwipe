@@ -141,7 +141,8 @@ func (s *Store) UpsertPhoto(relPath string, sizeBytes int64, mtime time.Time) (*
 }
 
 // NextUnhashed returns one photo that hasn't been hashed yet (DHashedAt
-// is zero) and isn't trashed. Returns nil if there's nothing to hash.
+// is zero), was hashed under an older algorithm version, or isn't trashed.
+// Returns nil if there's nothing to hash.
 func (s *Store) NextUnhashed() *Photo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -149,7 +150,7 @@ func (s *Store) NextUnhashed() *Photo {
 		if p.State == StateTrashed {
 			continue
 		}
-		if p.DHashedAt.IsZero() {
+		if p.DHashedAt.IsZero() || p.HashVersion < CurrentHashVersion {
 			clone := *p
 			return &clone
 		}
@@ -157,15 +158,42 @@ func (s *Store) NextUnhashed() *Photo {
 	return nil
 }
 
-// SetHash records a successful hash computation.
-func (s *Store) SetHash(id string, hash uint64) error {
+// CurrentHashVersion is the algorithm version of dhash.Compute. Photos
+// stored with a lower HashVersion are treated as unhashed so the indexer
+// will redo them — see NextUnhashed.
+const CurrentHashVersion = 2
+
+// SetCaptureTime updates a photo's capture time, preferring EXIF
+// DateTimeOriginal over the mtime previously set during scan. Idempotent;
+// only writes if t differs from the existing value.
+func (s *Store) SetCaptureTime(id string, t time.Time) error {
+	if t.IsZero() {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.state.Photos[id]
 	if !ok {
 		return errors.New("photo not found")
 	}
-	p.DHash = hash
+	if p.Time.Equal(t) {
+		return nil
+	}
+	p.Time = t
+	return s.saveLocked()
+}
+
+// SetHash records a successful hash computation under CurrentHashVersion.
+func (s *Store) SetHash(id string, h, v uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.state.Photos[id]
+	if !ok {
+		return errors.New("photo not found")
+	}
+	p.DHash = h
+	p.DHashV = v
+	p.HashVersion = CurrentHashVersion
 	p.DHashedAt = time.Now()
 	return s.saveLocked()
 }
@@ -179,6 +207,8 @@ func (s *Store) MarkHashFailed(id string) error {
 		return errors.New("photo not found")
 	}
 	p.DHash = 0
+	p.DHashV = 0
+	p.HashVersion = CurrentHashVersion
 	p.DHashedAt = time.Now()
 	return s.saveLocked()
 }
@@ -193,7 +223,7 @@ func (s *Store) HashProgress() (int, int) {
 			continue
 		}
 		total++
-		if !p.DHashedAt.IsZero() {
+		if !p.DHashedAt.IsZero() && p.HashVersion >= CurrentHashVersion {
 			hashed++
 		}
 	}
