@@ -20,9 +20,13 @@
     </div>
     {{end}}
     <nav>
-      <a href="/duplicates">duplicates</a>
-      <a href="/settings">settings</a>
-      <a href="/logout">logout</a>
+      {{if .Session}}
+      <form method="post" action="/session/end" class="inline-form">
+        <button type="submit" class="link-btn" title="end this batch">finish sort</button>
+      </form>
+      {{end}}
+      <a href="/settings" class="gear" title="settings" aria-label="settings">⚙</a>
+      <a href="/logout" title="log out">logout</a>
     </nav>
   </header>
   <main>{{template "content" .}}</main>

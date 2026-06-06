@@ -14,7 +14,14 @@
     return c ? c.dataset.photoId : null;
   }
 
+  function isClusterCard() {
+    return !!document.querySelector('#photo-area .card[data-card-kind="cluster"]');
+  }
+
   function decide(action) {
+    // Cluster cards have their own form submit; per-photo gestures are
+    // disabled. The user resolves the cluster via Apply / Skip cluster.
+    if (isClusterCard()) return;
     const id = currentPhotoId();
     if (!id) return;
     if (typeof htmx === 'undefined') return;
@@ -56,7 +63,7 @@
       case 'i':
       case 'I':
         e.preventDefault();
-        decide('unsure');
+        decide('skip');
         break;
       case 'z':
       case 'Z':
@@ -106,6 +113,7 @@
   function startDrag(e) {
     const card = e.target.closest('.card');
     if (!card || card.classList.contains('zoomed')) return;
+    if (card.dataset.cardKind === 'cluster') return;
     const point = e.touches ? e.touches[0] : e;
     drag = {
       card: card,
@@ -119,13 +127,13 @@
     const dx = point.clientX - drag.x0;
     const dy = point.clientY - drag.y0;
     drag.card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx * 0.04}deg)`;
-    drag.card.classList.remove('swipe-keep', 'swipe-trash', 'swipe-unsure');
+    drag.card.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
     const absX = Math.abs(dx), absY = Math.abs(dy);
     if (absX > absY) {
       if (dx > 30) drag.card.classList.add('swipe-keep');
       else if (dx < -30) drag.card.classList.add('swipe-trash');
     } else if (dy < -30) {
-      drag.card.classList.add('swipe-unsure');
+      drag.card.classList.add('swipe-skip');
     }
   }
   function endDrag(e) {
@@ -142,21 +150,21 @@
       if (dx > SWIPE_DIST || (dx > 30 && vel > SWIPE_VELOCITY)) action = 'keep';
       else if (dx < -SWIPE_DIST || (dx < -30 && vel > SWIPE_VELOCITY)) action = 'trash';
     } else {
-      if (dy < -SWIPE_DIST || (dy < -30 && vel > SWIPE_VELOCITY)) action = 'unsure';
+      if (dy < -SWIPE_DIST || (dy < -30 && vel > SWIPE_VELOCITY)) action = 'skip';
     }
 
     const c = drag.card;
     if (action) {
       c.style.transition = 'transform 0.18s ease-out, opacity 0.18s ease-out';
       const tx = action === 'keep' ? '120vw' : action === 'trash' ? '-120vw' : '0';
-      const ty = action === 'unsure' ? '-100vh' : '0';
+      const ty = action === 'skip' ? '-100vh' : '0';
       c.style.transform = `translate(${tx}, ${ty})`;
       c.style.opacity = 0;
       decide(action);
     } else {
       c.style.transition = 'transform 0.18s ease-out';
       c.style.transform = '';
-      c.classList.remove('swipe-keep', 'swipe-trash', 'swipe-unsure');
+      c.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
     }
     drag = null;
   }

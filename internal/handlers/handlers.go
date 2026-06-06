@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"net/url"
-
 	"photoSwipe/internal/auth"
 	"photoSwipe/internal/dupes"
 	"photoSwipe/internal/img"
@@ -36,14 +34,13 @@ type handler struct {
 	auth     *auth.Auth
 	selector *queue.Selector
 
-	tplLogin        *template.Template
-	tplSessionStart *template.Template
-	tplPhoto        *template.Template
-	tplSummary      *template.Template
-	tplSettings     *template.Template
-	tplDuplicates   *template.Template
-	tplCard         *template.Template
-	tplMeta         *template.Template
+	tplLogin    *template.Template
+	tplPhoto    *template.Template
+	tplSummary  *template.Template
+	tplSettings *template.Template
+	tplCard     *template.Template
+	tplCluster  *template.Template
+	tplMeta     *template.Template
 }
 
 // Counts mirrors store.Counts as a struct for template use.
@@ -71,11 +68,11 @@ func New(d Deps) (http.Handler, error) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(d.Static))))
 	mux.Handle("/login", h.auth.HandleLogin(h.renderLogin))
 	mux.HandleFunc("GET /{$}", h.handleHome)
-	mux.HandleFunc("POST /session/start", h.handleSessionStart)
 	mux.HandleFunc("POST /session/end", h.handleSessionEnd)
 	mux.HandleFunc("POST /session/extend", h.handleSessionExtend)
 	mux.HandleFunc("GET /next", h.handleNext)
 	mux.HandleFunc("POST /decision", h.handleDecision)
+	mux.HandleFunc("POST /cluster/resolve", h.handleClusterResolve)
 	mux.HandleFunc("POST /undo", h.handleUndo)
 	mux.HandleFunc("GET /photo/{id}", h.handleServePhoto)
 	mux.HandleFunc("GET /thumb/{id}", h.handleThumb)
@@ -83,8 +80,6 @@ func New(d Deps) (http.Handler, error) {
 	mux.HandleFunc("GET /settings", h.handleSettings)
 	mux.HandleFunc("POST /settings", h.handleUpdateSettings)
 	mux.HandleFunc("POST /rescan", h.handleRescan)
-	mux.HandleFunc("GET /duplicates", h.handleDuplicates)
-	mux.HandleFunc("POST /duplicates/resolve", h.handleDuplicatesResolve)
 
 	return h.auth.Middleware(mux), nil
 }
@@ -104,10 +99,13 @@ func (h *handler) loadTemplates() error {
 		if err != nil {
 			return nil, err
 		}
-		// Cards may be embedded in pages
-		cardBytes, _ := fs.ReadFile(h.deps.Templates, "frag_card.html")
-		if len(cardBytes) > 0 {
-			if _, err := t.Parse(string(cardBytes)); err != nil {
+		// Card + cluster fragments may be embedded in pages.
+		for _, frag := range []string{"frag_card.html", "frag_cluster.html"} {
+			fb, _ := fs.ReadFile(h.deps.Templates, frag)
+			if len(fb) == 0 {
+				continue
+			}
+			if _, err := t.Parse(string(fb)); err != nil {
 				return nil, err
 			}
 		}
@@ -127,9 +125,6 @@ func (h *handler) loadTemplates() error {
 	if h.tplLogin, err = makeFragment("login.html", "login"); err != nil {
 		return err
 	}
-	if h.tplSessionStart, err = makePage("session_start.html"); err != nil {
-		return err
-	}
 	if h.tplPhoto, err = makePage("photo.html"); err != nil {
 		return err
 	}
@@ -139,10 +134,10 @@ func (h *handler) loadTemplates() error {
 	if h.tplSettings, err = makePage("settings.html"); err != nil {
 		return err
 	}
-	if h.tplDuplicates, err = makePage("duplicates.html"); err != nil {
+	if h.tplCard, err = makeFragment("frag_card.html", "card"); err != nil {
 		return err
 	}
-	if h.tplCard, err = makeFragment("frag_card.html", "card"); err != nil {
+	if h.tplCluster, err = makeFragment("frag_cluster.html", "cluster"); err != nil {
 		return err
 	}
 	if h.tplMeta, err = makeFragment("frag_meta.html", "meta"); err != nil {
@@ -167,28 +162,23 @@ type pageData struct {
 	Path, PathShort  string
 	SizeKB           int64
 	ModTime          string
+	Indexing         bool
+	Indexed          int
+	Total            int
 
-	// Duplicates page
-	HasCluster      bool
-	ClusterID       string
-	Photos          []DupPhoto
-	Position        int
-	TotalClusters   int
-	SkippedList     string
-	Indexing        bool
-	Indexed         int
-	Total           int
-	Threshold       int
-	TimeWindowHours float64
+	// Cluster card fragment
+	ClusterID string
+	Photos    []ClusterMember
 }
 
-// DupPhoto is a view-model for one entry in a cluster grid.
-type DupPhoto struct {
-	ID, Path, PathShort, TimeStr string
-	SizeKB                       int64
-	IsBest                       bool
+// ClusterMember is a view-model for one entry in the inline cluster grid.
+type ClusterMember struct {
+	ID, PathShort, TimeStr string
+	SizeKB                 int64
 }
 
+// Counts mirrors store.Counts. Unsure is preserved as a struct field name
+// for back-compat with template references; surfaced as "Skipped" in UI.
 func (h *handler) counts() Counts {
 	u, k, m, t := h.deps.Store.Counts()
 	return Counts{Unsorted: u, Kept: k, Unsure: m, Trashed: t}
@@ -224,11 +214,12 @@ func (h *handler) renderLogin(w http.ResponseWriter, errMsg string) {
 func (h *handler) handleHome(w http.ResponseWriter, r *http.Request) {
 	sess := h.deps.Store.Session()
 	if sess == nil {
-		h.renderPage(w, h.tplSessionStart, pageData{
-			BodyClass: "session-start-body",
-			Counts:    h.counts(),
-		})
-		return
+		newSess, err := h.deps.Store.AutoStartSession()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sess = newSess
 	}
 	if sess.Complete() {
 		h.renderPage(w, h.tplSummary, h.summaryData(sess))
@@ -243,38 +234,17 @@ func (h *handler) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.renderPage(w, h.tplPhoto, pageData{
+	data := pageData{
 		BodyClass: "photo-body",
 		Session:   sess,
 		Counts:    h.counts(),
 		Photo:     photo,
-	})
-}
-
-func (h *handler) handleSessionStart(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
 	}
-	target := 50
-	if v := r.PostFormValue("target_custom"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			target = n
-		}
-	} else if v := r.PostFormValue("target"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			target = n
-		}
+	if cluster := h.openClusterFor(photo); cluster != nil {
+		data.ClusterID = cluster.ID
+		data.Photos = clusterMembers(cluster)
 	}
-	mix := store.CompositionMix(r.PostFormValue("mix"))
-	if !mix.Valid() {
-		mix = store.MixMixed
-	}
-	if _, err := h.deps.Store.StartSession(target, mix); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	h.renderPage(w, h.tplPhoto, data)
 }
 
 func (h *handler) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +261,9 @@ func (h *handler) handleSessionExtend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delta, _ := strconv.Atoi(r.PostFormValue("delta"))
+	if delta == 0 {
+		delta = h.deps.Store.Settings().DefaultBatchSize
+	}
 	if err := h.deps.Store.SessionExtend(delta); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -299,6 +272,14 @@ func (h *handler) handleSessionExtend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleNext(w http.ResponseWriter, r *http.Request) {
+	h.renderNext(w)
+}
+
+// renderNext picks the next photo and writes either the single-photo card
+// fragment or, if the picked photo is part of an unresolved cluster, the
+// cluster card fragment. Used by handleNext, handleDecision, handleUndo,
+// and handleClusterResolve when they need to swap #photo-area.
+func (h *handler) renderNext(w http.ResponseWriter) {
 	sess := h.deps.Store.Session()
 	if sess == nil || sess.Complete() {
 		w.Header().Set("HX-Redirect", "/")
@@ -313,6 +294,13 @@ func (h *handler) handleNext(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if cluster := h.openClusterFor(photo); cluster != nil {
+		h.renderFragment(w, h.tplCluster, "cluster", pageData{
+			ClusterID: cluster.ID,
+			Photos:    clusterMembers(cluster),
+		})
 		return
 	}
 	h.renderFragment(w, h.tplCard, "card", pageData{Photo: photo})
@@ -332,13 +320,24 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Skip: photo is left as if never shown. Back-compat: also accept
+	// "unsure" from any pre-rename client.
+	if action == "skip" || action == "unsure" {
+		if _, err := h.deps.Store.RecordSkip(photoID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// HX-Trigger so the header progress chip re-fetches.
+		w.Header().Set("HX-Trigger", "session-updated")
+		h.renderNext(w)
+		return
+	}
+
 	var newState store.PhotoState
 	var trashFrom, trashTo string
 	switch action {
 	case "keep":
 		newState = store.StateKept
-	case "unsure":
-		newState = store.StateUnsure
 	case "trash":
 		newState = store.StateTrashed
 		src, err := h.resolvePhotoPath(photo.Path)
@@ -361,25 +360,8 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	sess := h.deps.Store.Session()
-	if sess == nil || sess.Complete() {
-		w.Header().Set("HX-Redirect", "/")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	next, err := h.pickNext(sess)
-	if errors.Is(err, queue.ErrNoCandidate) {
-		w.Header().Set("HX-Redirect", "/")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// We swap #photo-area innerHTML; deliver the card fragment.
-	h.renderFragment(w, h.tplCard, "card", pageData{Photo: next})
+	w.Header().Set("HX-Trigger", "session-updated")
+	h.renderNext(w)
 }
 
 func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
@@ -388,17 +370,27 @@ func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if d.NewState == store.StateTrashed && d.TrashTo != "" && d.TrashFrom != "" {
-		if err := img.RestoreFromTrash(d.TrashTo, d.TrashFrom); err != nil {
-			log.Printf("restore failed: %v", err)
+	switch {
+	case d.Cluster != nil:
+		// Restore every trashed member's file.
+		for _, op := range d.Cluster {
+			if op.NewState == store.StateTrashed && op.TrashTo != "" && op.TrashFrom != "" {
+				if err := img.RestoreFromTrash(op.TrashTo, op.TrashFrom); err != nil {
+					log.Printf("cluster restore %s: %v", op.PhotoID, err)
+				}
+			}
+		}
+	case d.Skipped:
+		// Nothing to do on the filesystem.
+	default:
+		if d.NewState == store.StateTrashed && d.TrashTo != "" && d.TrashFrom != "" {
+			if err := img.RestoreFromTrash(d.TrashTo, d.TrashFrom); err != nil {
+				log.Printf("restore failed: %v", err)
+			}
 		}
 	}
-	photo, ok := h.deps.Store.GetPhoto(d.PhotoID)
-	if !ok {
-		http.Error(w, "photo missing", http.StatusInternalServerError)
-		return
-	}
-	h.renderFragment(w, h.tplCard, "card", pageData{Photo: photo})
+	w.Header().Set("HX-Trigger", "session-updated")
+	h.renderNext(w)
 }
 
 func (h *handler) handleServePhoto(w http.ResponseWriter, r *http.Request) {
@@ -449,10 +441,15 @@ func (h *handler) handleMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleSettings(w http.ResponseWriter, r *http.Request) {
+	hashed, total := h.deps.Store.HashProgress()
 	h.renderPage(w, h.tplSettings, pageData{
 		BodyClass: "settings-body",
 		Session:   h.deps.Store.Session(),
 		Settings:  h.deps.Store.Settings(),
+		Counts:    h.counts(),
+		Indexing:  hashed < total,
+		Indexed:   hashed,
+		Total:     total,
 	})
 }
 
@@ -485,6 +482,11 @@ func (h *handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	cur.FatigueThreshold = parseI("fatigue_threshold", cur.FatigueThreshold)
 	cur.DupeThreshold = parseI("dupe_threshold", cur.DupeThreshold)
 	cur.DupeTimeWindowHours = parseF("dupe_time_window_hours", cur.DupeTimeWindowHours)
+	cur.DefaultBatchSize = parseI("default_batch_size", cur.DefaultBatchSize)
+	if mix := store.CompositionMix(r.PostFormValue("default_mix")); mix.Valid() {
+		cur.DefaultMix = mix
+	}
+	cur.SkipAdvancesCounter = r.PostFormValue("skip_advances_counter") != ""
 	if err := h.deps.Store.UpdateSettings(cur); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -552,64 +554,18 @@ func (h *handler) handleThumb(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) handleDuplicates(w http.ResponseWriter, r *http.Request) {
-	skippedRaw := r.URL.Query().Get("skipped")
-	skippedSet := map[string]bool{}
-	for _, id := range splitCSV(skippedRaw) {
-		skippedSet[id] = true
-	}
-
-	settings := h.deps.Store.Settings()
-	window := time.Duration(settings.DupeTimeWindowHours * float64(time.Hour))
-	clusters := dupes.Find(h.deps.Store.AllPhotos(), settings.DupeThreshold, window)
-
-	var active *dupes.Cluster
-	var position int
-	for i := range clusters {
-		if skippedSet[clusters[i].ID] {
-			continue
-		}
-		active = &clusters[i]
-		position = i + 1
-		break
-	}
-
-	hashed, total := h.deps.Store.HashProgress()
-	data := pageData{
-		BodyClass:       "duplicates-body",
-		Session:         h.deps.Store.Session(),
-		Indexing:        hashed < total,
-		Indexed:         hashed,
-		Total:           total,
-		Threshold:       settings.DupeThreshold,
-		TimeWindowHours: settings.DupeTimeWindowHours,
-		TotalClusters:   len(clusters),
-		SkippedList:     skippedRaw,
-	}
-	if active != nil {
-		data.HasCluster = true
-		data.ClusterID = active.ID
-		data.Position = position
-		data.Photos = toDupPhotos(active.Photos, active.Photos[0].ID)
-	}
-	h.renderPage(w, h.tplDuplicates, data)
-}
-
-func (h *handler) handleDuplicatesResolve(w http.ResponseWriter, r *http.Request) {
+// handleClusterResolve applies a "keep these, trash the rest" decision to
+// a near-duplicate cluster surfaced inline from the swipe view. If no
+// keep[] values are posted, the entire cluster is trashed (the user's
+// "dismiss the entire set" default). If action=skip is posted, the
+// cluster's members are added to RecentlySkipped instead.
+func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	action := r.PostFormValue("action")
 	clusterID := r.PostFormValue("cluster_id")
-	bestID := r.PostFormValue("best_id")
-	skipped := r.PostFormValue("skipped")
-
-	if action == "skip" {
-		skipped = appendCSV(skipped, clusterID)
-		http.Redirect(w, r, "/duplicates?skipped="+url.QueryEscape(skipped), http.StatusSeeOther)
-		return
-	}
+	action := r.PostFormValue("action")
 
 	settings := h.deps.Store.Settings()
 	window := time.Duration(settings.DupeTimeWindowHours * float64(time.Hour))
@@ -623,58 +579,110 @@ func (h *handler) handleDuplicatesResolve(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if target == nil {
-		// Cluster vanished (race or already resolved); just move on.
-		http.Redirect(w, r, "/duplicates?skipped="+url.QueryEscape(skipped), http.StatusSeeOther)
+		// Cluster vanished (already resolved by another tab); just move on.
+		w.Header().Set("HX-Trigger", "session-updated")
+		h.renderNext(w)
 		return
 	}
 
+	// Skip cluster: push every member onto RecentlySkipped via the existing
+	// per-photo RecordSkip path. Counter advances once per skip if enabled.
+	if action == "skip" {
+		for _, p := range target.Photos {
+			if p.State != store.StateUnsorted {
+				continue
+			}
+			if _, err := h.deps.Store.RecordSkip(p.ID); err != nil {
+				log.Printf("cluster skip %s: %v", p.ID, err)
+			}
+		}
+		w.Header().Set("HX-Trigger", "session-updated")
+		h.renderNext(w)
+		return
+	}
+
+	keepSet := map[string]bool{}
+	for _, id := range r.PostForm["keep"] {
+		keepSet[id] = true
+	}
+
+	var ops []store.ClusterMemberOp
 	for _, p := range target.Photos {
-		switch action {
-		case "keep_best":
-			if p.ID == bestID {
-				if err := h.deps.Store.SetPhotoState(p.ID, store.StateKept, ""); err != nil {
-					log.Printf("keep_best/keep %s: %v", p.ID, err)
-				}
-			} else {
-				h.trashOne(p)
+		if p.State != store.StateUnsorted {
+			continue // already decided; leave it alone
+		}
+		if keepSet[p.ID] {
+			ops = append(ops, store.ClusterMemberOp{
+				PhotoID:  p.ID,
+				NewState: store.StateKept,
+			})
+			continue
+		}
+		// Trash: move the file before we record the decision.
+		src, err := h.resolvePhotoPath(p.Path)
+		if err != nil {
+			log.Printf("resolve %s: %v", p.ID, err)
+			continue
+		}
+		dst, err := img.MoveToTrash(src, h.deps.PhotoDir, h.deps.TrashDir)
+		if err != nil {
+			log.Printf("trash %s: %v", p.ID, err)
+			continue
+		}
+		ops = append(ops, store.ClusterMemberOp{
+			PhotoID:   p.ID,
+			NewState:  store.StateTrashed,
+			TrashFrom: src,
+			TrashTo:   dst,
+		})
+	}
+	if len(ops) == 0 {
+		w.Header().Set("HX-Trigger", "session-updated")
+		h.renderNext(w)
+		return
+	}
+	if _, err := h.deps.Store.RecordClusterDecision(clusterID, ops); err != nil {
+		log.Printf("record cluster %s: %v", clusterID, err)
+	}
+	w.Header().Set("HX-Trigger", "session-updated")
+	h.renderNext(w)
+}
+
+// openClusterFor returns the cluster containing p iff that cluster has at
+// least two still-unsorted members. Otherwise nil — meaning "render the
+// normal single-photo card".
+func (h *handler) openClusterFor(p *store.Photo) *dupes.Cluster {
+	if p == nil {
+		return nil
+	}
+	settings := h.deps.Store.Settings()
+	window := time.Duration(settings.DupeTimeWindowHours * float64(time.Hour))
+	clusters := dupes.Find(h.deps.Store.AllPhotos(), settings.DupeThreshold, window)
+	for i := range clusters {
+		var contains bool
+		var unsorted int
+		for _, m := range clusters[i].Photos {
+			if m.ID == p.ID {
+				contains = true
 			}
-		case "keep_all":
-			if err := h.deps.Store.SetPhotoState(p.ID, store.StateKept, ""); err != nil {
-				log.Printf("keep_all %s: %v", p.ID, err)
+			if m.State == store.StateUnsorted {
+				unsorted++
 			}
-		case "trash_all":
-			h.trashOne(p)
-		default:
-			http.Error(w, "unknown action", http.StatusBadRequest)
-			return
+		}
+		if contains && unsorted >= 2 {
+			return &clusters[i]
 		}
 	}
-
-	http.Redirect(w, r, "/duplicates?skipped="+url.QueryEscape(skipped), http.StatusSeeOther)
+	return nil
 }
 
-func (h *handler) trashOne(p *store.Photo) {
-	if p.State == store.StateTrashed {
-		return
-	}
-	src, err := h.resolvePhotoPath(p.Path)
-	if err != nil {
-		log.Printf("resolve %s: %v", p.ID, err)
-		return
-	}
-	dst, err := img.MoveToTrash(src, h.deps.PhotoDir, h.deps.TrashDir)
-	if err != nil {
-		log.Printf("trash %s: %v", p.ID, err)
-		return
-	}
-	if err := h.deps.Store.SetPhotoState(p.ID, store.StateTrashed, dst); err != nil {
-		log.Printf("set state trashed %s: %v", p.ID, err)
-	}
-}
-
-func toDupPhotos(photos []*store.Photo, bestID string) []DupPhoto {
-	out := make([]DupPhoto, 0, len(photos))
-	for _, p := range photos {
+// clusterMembers returns a view-model of all unsorted members in a cluster.
+func clusterMembers(c *dupes.Cluster) []ClusterMember {
+	out := make([]ClusterMember, 0, len(c.Photos))
+	for _, p := range c.Photos {
+		if p.State != store.StateUnsorted {
+			continue
+		}
 		short := p.Path
 		if i := strings.LastIndex(short, "/"); i >= 0 {
 			short = short[i+1:]
@@ -683,38 +691,14 @@ func toDupPhotos(photos []*store.Photo, bestID string) []DupPhoto {
 		if !p.Time.IsZero() {
 			ts = p.Time.Format("2006-01-02 15:04")
 		}
-		out = append(out, DupPhoto{
+		out = append(out, ClusterMember{
 			ID:        p.ID,
-			Path:      p.Path,
 			PathShort: short,
 			TimeStr:   ts,
 			SizeKB:    (p.SizeBytes + 1023) / 1024,
-			IsBest:    p.ID == bestID,
 		})
 	}
 	return out
-}
-
-func splitCSV(s string) []string {
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, ",")
-}
-
-func appendCSV(s, v string) string {
-	if v == "" {
-		return s
-	}
-	if s == "" {
-		return v
-	}
-	for _, e := range strings.Split(s, ",") {
-		if e == v {
-			return s
-		}
-	}
-	return s + "," + v
 }
 
 // resolvePhotoPath joins relPath under photoDir, rejecting traversal.

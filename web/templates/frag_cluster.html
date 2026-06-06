@@ -1,0 +1,25 @@
+{{define "cluster"}}
+<article class="card cluster" data-card-kind="cluster" data-cluster-id="{{.ClusterID}}">
+  <header class="cluster-head">
+    <strong>{{len .Photos}} similar photos</strong>
+    <small>Tick the ones to keep. Unticked photos will be trashed when you apply.</small>
+  </header>
+  <form id="cluster-form" class="cluster-grid"
+        hx-post="/cluster/resolve"
+        hx-target="#photo-area"
+        hx-swap="innerHTML">
+    <input type="hidden" name="cluster_id" value="{{.ClusterID}}">
+    {{range .Photos}}
+    <label class="cluster-thumb">
+      <input type="checkbox" name="keep" value="{{.ID}}">
+      <img src="/thumb/{{.ID}}?w=400" alt="{{.PathShort}}" loading="lazy">
+      <span class="cluster-meta">{{.PathShort}}<br>{{.SizeKB}} KB{{if .TimeStr}} · {{.TimeStr}}{{end}}</span>
+    </label>
+    {{end}}
+    <div class="cluster-actions">
+      <button type="submit" class="primary">Apply</button>
+      <button type="submit" name="action" value="skip" class="secondary">Skip cluster</button>
+    </div>
+  </form>
+</article>
+{{end}}

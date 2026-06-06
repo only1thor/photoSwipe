@@ -1,30 +1,37 @@
 {{define "content"}}
 <div class="settings">
   <h1>Settings</h1>
+
+  <section class="counts-chip">
+    <span><strong>{{.Counts.Unsorted}}</strong> to sort</span>
+    <span><strong>{{.Counts.Kept}}</strong> kept</span>
+    <span><strong>{{.Counts.Trashed}}</strong> trashed</span>
+    {{if .Indexing}}<span class="indexing">indexing {{.Indexed}} / {{.Total}}</span>{{end}}
+  </section>
+
   <form method="POST" action="/settings">
     <fieldset>
-      <legend>Resurface algorithm</legend>
-      <label>Base rate
-        <input type="number" name="base_rate" min="0" max="1" step="0.01" value="{{.Settings.BaseRate}}">
-        <small>Initial weight for a kept photo vs. an unsorted one (0–1).</small>
+      <legend>Session defaults</legend>
+      <label>Batch size
+        <input type="number" name="default_batch_size" min="1" max="999" step="1" value="{{.Settings.DefaultBatchSize}}">
+        <small>How many photos to sort per batch. You can always continue after.</small>
       </label>
-      <label>Decay
-        <input type="number" name="decay" min="0" max="1" step="0.05" value="{{.Settings.Decay}}">
-        <small>Per-keep multiplier — lower means resurface fades faster.</small>
+      <label>Composition mix
+        <select name="default_mix">
+          <option value="all_new" {{if eq (printf "%s" .Settings.DefaultMix) "all_new"}}selected{{end}}>All new (only never-decided photos)</option>
+          <option value="mixed" {{if eq (printf "%s" .Settings.DefaultMix) "mixed"}}selected{{end}}>Mixed (new + occasional review)</option>
+          <option value="heavy_review" {{if eq (printf "%s" .Settings.DefaultMix) "heavy_review"}}selected{{end}}>Heavy review (mostly resurfaced)</option>
+          <option value="review_only" {{if eq (printf "%s" .Settings.DefaultMix) "review_only"}}selected{{end}}>Review only (no new photos)</option>
+        </select>
+        <small>What kind of photos to surface in each batch.</small>
       </label>
-      <label>Unsure base rate
-        <input type="number" name="unsure_base_rate" min="0" max="2" step="0.05" value="{{.Settings.UnsureBaseRate}}">
-        <small>Weight for unsure photos (typically higher than kept).</small>
-      </label>
-      <label>Cooldown (hours)
-        <input type="number" name="cooldown_hours" min="0" max="168" step="0.5" value="{{.Settings.CooldownHours}}">
-        <small>Time before a decided photo can resurface.</small>
-      </label>
-      <label>Lock threshold
-        <input type="number" name="lock_threshold" min="0" max="20" step="1" value="{{.Settings.LockThreshold}}">
-        <small>0 = no auto-lock. N = photo stops resurfacing after N keeps.</small>
+      <label class="check">
+        <input type="checkbox" name="skip_advances_counter" {{if .Settings.SkipAdvancesCounter}}checked{{end}}>
+        Skip counts toward the batch
+        <small>If on, a skip uses one of the batch slots (predictable count). If off, skipping pulls in a replacement photo so the batch is N actual decisions.</small>
       </label>
     </fieldset>
+
     <fieldset>
       <legend>Near-duplicate detection</legend>
       <label>Hamming distance threshold
@@ -37,17 +44,57 @@
       </label>
     </fieldset>
 
-    <fieldset>
-      <legend>Fatigue nudge</legend>
-      <label class="check">
-        <input type="checkbox" name="fatigue_nudge" {{if .Settings.FatigueNudge}}checked{{end}}>
-        Show a break suggestion after many decisions in one day
-      </label>
-      <label>Threshold
-        <input type="number" name="fatigue_threshold" min="10" max="1000" step="10" value="{{.Settings.FatigueThreshold}}">
-      </label>
-    </fieldset>
+    <details>
+      <summary>Advanced (resurface algorithm)</summary>
+      <fieldset>
+        <legend>Resurface weights</legend>
+        <label>Base rate
+          <input type="number" name="base_rate" min="0" max="1" step="0.01" value="{{.Settings.BaseRate}}">
+          <small>Initial weight for a kept photo vs. an unsorted one (0–1).</small>
+        </label>
+        <label>Decay
+          <input type="number" name="decay" min="0" max="1" step="0.05" value="{{.Settings.Decay}}">
+          <small>Per-keep multiplier — lower means resurface fades faster.</small>
+        </label>
+        <label>Legacy unsure weight
+          <input type="number" name="unsure_base_rate" min="0" max="2" step="0.05" value="{{.Settings.UnsureBaseRate}}">
+          <small>Only affects photos marked "unsure" before the rename to "skip". Skipped photos in new sessions no longer use this.</small>
+        </label>
+        <label>Cooldown (hours)
+          <input type="number" name="cooldown_hours" min="0" max="168" step="0.5" value="{{.Settings.CooldownHours}}">
+          <small>Time before a decided photo can resurface.</small>
+        </label>
+        <label>Lock threshold
+          <input type="number" name="lock_threshold" min="0" max="20" step="1" value="{{.Settings.LockThreshold}}">
+          <small>0 = no auto-lock. N = photo stops resurfacing after N keeps.</small>
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Fatigue nudge</legend>
+        <label class="check">
+          <input type="checkbox" name="fatigue_nudge" {{if .Settings.FatigueNudge}}checked{{end}}>
+          Show a break suggestion after many decisions in one day
+        </label>
+        <label>Threshold
+          <input type="number" name="fatigue_threshold" min="10" max="1000" step="10" value="{{.Settings.FatigueThreshold}}">
+        </label>
+      </fieldset>
+    </details>
+
     <button type="submit" class="primary">Save</button>
   </form>
+
+  <section class="admin-actions">
+    <h2>Admin</h2>
+    <form method="POST" action="/rescan" hx-post="/rescan" hx-target="#rescan-result" hx-swap="innerHTML">
+      <button type="submit">Rescan photo directory</button>
+      <span id="rescan-result"></span>
+    </form>
+    {{if .Session}}
+    <form method="POST" action="/session/end">
+      <button type="submit">End current batch</button>
+    </form>
+    {{end}}
+  </section>
 </div>
 {{end}}
