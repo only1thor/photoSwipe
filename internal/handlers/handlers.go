@@ -299,18 +299,29 @@ func (h *handler) handleNext(w http.ResponseWriter, r *http.Request) {
 // a single card or, if the photo is part of an unresolved cluster, as
 // the cluster fragment. Used by handleUndo so undo brings back the photo
 // the user just acted on, not a fresh weighted-random pick.
-// triggerSessionUpdate emits an HX-Trigger event so the client can refresh
-// the header progress chip without a full page reload. The detail carries
-// the current Done / Target so the JS handler just sets textContent.
-func (h *handler) triggerSessionUpdate(w http.ResponseWriter) {
+// writeProgressOOB writes an out-of-band swap fragment that replaces the
+// header's #session-progress chip. Must be called BEFORE the main
+// fragment is written so the bytes land in the response body in order.
+// htmx 2.x picks any element with hx-swap-oob out of the response and
+// merges it by id into the existing DOM, leaving the rest to be swapped
+// into the normal hx-target.
+func (h *handler) writeProgressOOB(w http.ResponseWriter) {
 	sess := h.deps.Store.Session()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if sess == nil {
-		w.Header().Set("HX-Trigger", `{"session-updated":{"done":0,"target":0,"active":false}}`)
+		// Empty chip: keeps the target element on the page but hides it.
+		fmt.Fprint(w, `<div id="session-progress" class="progress empty" hx-swap-oob="true"></div>`)
 		return
 	}
-	w.Header().Set("HX-Trigger",
-		fmt.Sprintf(`{"session-updated":{"done":%d,"target":%d,"active":true}}`,
-			sess.Done, sess.Target))
+	if sess.Target > 0 {
+		fmt.Fprintf(w,
+			`<div id="session-progress" class="progress" hx-swap-oob="true" title="decisions this session"><span class="done">%d</span><span class="of"> / %d</span></div>`,
+			sess.Done, sess.Target)
+		return
+	}
+	fmt.Fprintf(w,
+		`<div id="session-progress" class="progress" hx-swap-oob="true" title="decisions this session"><span class="done">%d</span></div>`,
+		sess.Done)
 }
 
 func (h *handler) renderForPhoto(w http.ResponseWriter, p *store.Photo) {
@@ -402,8 +413,8 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// HX-Trigger so the header progress chip updates live.
-		h.triggerSessionUpdate(w)
+		// Update the header chip live via OOB swap (writes before body).
+		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
@@ -435,7 +446,7 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.triggerSessionUpdate(w)
+	h.writeProgressOOB(w)
 	h.renderNext(w)
 }
 
@@ -445,7 +456,7 @@ func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.triggerSessionUpdate(w)
+	h.writeProgressOOB(w)
 	switch {
 	case d.Cluster != nil:
 		// Restore every trashed member's file, then re-render the cluster
@@ -729,7 +740,7 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if target == nil {
 		// Cluster vanished (already resolved by another tab); just move on.
-		h.triggerSessionUpdate(w)
+		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
@@ -747,7 +758,7 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.deps.Store.SkipCluster(clusterID, ids); err != nil {
 			log.Printf("cluster skip %s: %v", clusterID, err)
 		}
-		h.triggerSessionUpdate(w)
+		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
@@ -788,14 +799,14 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if len(ops) == 0 {
-		h.triggerSessionUpdate(w)
+		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
 	if _, err := h.deps.Store.RecordClusterDecision(clusterID, ops); err != nil {
 		log.Printf("record cluster %s: %v", clusterID, err)
 	}
-	h.triggerSessionUpdate(w)
+	h.writeProgressOOB(w)
 	h.renderNext(w)
 }
 

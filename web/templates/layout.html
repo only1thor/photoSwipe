@@ -14,11 +14,12 @@
 <body class="{{.BodyClass}}">
   <header>
     <a class="brand" href="/">photoSwipe</a>
-    {{if .Session}}
-    <div class="progress" title="decisions this session">
-      <span class="done">{{.Session.Done}}</span>{{if gt .Session.Target 0}}<span class="of"> / {{.Session.Target}}</span>{{end}}
+    {{/* The progress chip always exists in the DOM (even when empty) so
+         that hx-swap-oob from /decision, /undo, /cluster/resolve can
+         target it. It's filled only when a session is active. */}}
+    <div id="session-progress" class="progress{{if not .Session}} empty{{end}}"{{if .Session}} title="decisions this session"{{end}}>
+      {{if .Session}}<span class="done">{{.Session.Done}}</span>{{if gt .Session.Target 0}}<span class="of"> / {{.Session.Target}}</span>{{end}}{{end}}
     </div>
-    {{end}}
     <nav>
       {{if .Session}}
       <form method="post" action="/session/end" class="inline-form">

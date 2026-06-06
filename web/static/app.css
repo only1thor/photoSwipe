@@ -61,6 +61,7 @@ header {
   color: var(--fg-dim);
   font-size: 0.9rem;
 }
+.progress.empty { display: none; }
 .progress .done { color: var(--fg); font-weight: 600; }
 
 header nav { margin-left: auto; display: flex; gap: 1rem; }
