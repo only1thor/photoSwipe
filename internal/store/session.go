@@ -132,7 +132,7 @@ func DefaultSettings() Settings {
 		DupeThreshold:       35,
 		DefaultBatchSize:    10,
 		DefaultMix:          MixMixed,
-		SkipAdvancesCounter: true,
+		SkipAdvancesCounter: false,
 		ClusterCountsAsOne:  true,
 	}
 }

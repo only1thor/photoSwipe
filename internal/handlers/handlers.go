@@ -299,6 +299,20 @@ func (h *handler) handleNext(w http.ResponseWriter, r *http.Request) {
 // a single card or, if the photo is part of an unresolved cluster, as
 // the cluster fragment. Used by handleUndo so undo brings back the photo
 // the user just acted on, not a fresh weighted-random pick.
+// triggerSessionUpdate emits an HX-Trigger event so the client can refresh
+// the header progress chip without a full page reload. The detail carries
+// the current Done / Target so the JS handler just sets textContent.
+func (h *handler) triggerSessionUpdate(w http.ResponseWriter) {
+	sess := h.deps.Store.Session()
+	if sess == nil {
+		w.Header().Set("HX-Trigger", `{"session-updated":{"done":0,"target":0,"active":false}}`)
+		return
+	}
+	w.Header().Set("HX-Trigger",
+		fmt.Sprintf(`{"session-updated":{"done":%d,"target":%d,"active":true}}`,
+			sess.Done, sess.Target))
+}
+
 func (h *handler) renderForPhoto(w http.ResponseWriter, p *store.Photo) {
 	settings := h.deps.Store.Settings()
 	if cluster := h.openClusterFor(p); cluster != nil {
@@ -388,8 +402,8 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// HX-Trigger so the header progress chip re-fetches.
-		w.Header().Set("HX-Trigger", "session-updated")
+		// HX-Trigger so the header progress chip updates live.
+		h.triggerSessionUpdate(w)
 		h.renderNext(w)
 		return
 	}
@@ -421,7 +435,7 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("HX-Trigger", "session-updated")
+	h.triggerSessionUpdate(w)
 	h.renderNext(w)
 }
 
@@ -431,7 +445,7 @@ func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("HX-Trigger", "session-updated")
+	h.triggerSessionUpdate(w)
 	switch {
 	case d.Cluster != nil:
 		// Restore every trashed member's file, then re-render the cluster
@@ -715,7 +729,7 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if target == nil {
 		// Cluster vanished (already resolved by another tab); just move on.
-		w.Header().Set("HX-Trigger", "session-updated")
+		h.triggerSessionUpdate(w)
 		h.renderNext(w)
 		return
 	}
@@ -733,7 +747,7 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.deps.Store.SkipCluster(clusterID, ids); err != nil {
 			log.Printf("cluster skip %s: %v", clusterID, err)
 		}
-		w.Header().Set("HX-Trigger", "session-updated")
+		h.triggerSessionUpdate(w)
 		h.renderNext(w)
 		return
 	}
@@ -774,14 +788,14 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if len(ops) == 0 {
-		w.Header().Set("HX-Trigger", "session-updated")
+		h.triggerSessionUpdate(w)
 		h.renderNext(w)
 		return
 	}
 	if _, err := h.deps.Store.RecordClusterDecision(clusterID, ops); err != nil {
 		log.Printf("record cluster %s: %v", clusterID, err)
 	}
-	w.Header().Set("HX-Trigger", "session-updated")
+	h.triggerSessionUpdate(w)
 	h.renderNext(w)
 }
 

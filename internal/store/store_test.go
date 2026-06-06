@@ -24,7 +24,7 @@ func mustUpsert(t *testing.T, st *Store, rel string) *Photo {
 	return p
 }
 
-func TestRecordSkip_NoOpButAdvancesCounter(t *testing.T) {
+func TestRecordSkip_NoOpAndDoesNotAdvanceByDefault(t *testing.T) {
 	st := openTestStore(t)
 	p := mustUpsert(t, st, "a.jpg")
 	if _, err := st.StartSession(5, MixMixed); err != nil {
@@ -43,19 +43,19 @@ func TestRecordSkip_NoOpButAdvancesCounter(t *testing.T) {
 		t.Fatalf("skip bumped counters: keep=%d unsure=%d", got.KeepCount, got.UnsureCount)
 	}
 	sess := st.Session()
-	if sess.Done != 1 {
-		t.Fatalf("Done=%d, want 1 (SkipAdvancesCounter default true)", sess.Done)
+	if sess.Done != 0 {
+		t.Fatalf("Done=%d, want 0 (SkipAdvancesCounter default false)", sess.Done)
 	}
 	if len(sess.RecentlySkipped) != 1 || sess.RecentlySkipped[0] != p.ID {
 		t.Fatalf("RecentlySkipped=%v, want [%s]", sess.RecentlySkipped, p.ID)
 	}
 }
 
-func TestRecordSkip_DoesNotAdvanceWhenSettingDisabled(t *testing.T) {
+func TestRecordSkip_AdvancesWhenSettingEnabled(t *testing.T) {
 	st := openTestStore(t)
 	p := mustUpsert(t, st, "a.jpg")
 	s := st.Settings()
-	s.SkipAdvancesCounter = false
+	s.SkipAdvancesCounter = true
 	if err := st.UpdateSettings(s); err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
@@ -65,8 +65,8 @@ func TestRecordSkip_DoesNotAdvanceWhenSettingDisabled(t *testing.T) {
 	if _, err := st.RecordSkip(p.ID); err != nil {
 		t.Fatalf("RecordSkip: %v", err)
 	}
-	if d := st.Session().Done; d != 0 {
-		t.Fatalf("Done=%d, want 0", d)
+	if d := st.Session().Done; d != 1 {
+		t.Fatalf("Done=%d, want 1", d)
 	}
 }
 

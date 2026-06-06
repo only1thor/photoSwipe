@@ -22,6 +22,35 @@
   function clusterIsExpanded(card) {
     return card && card.classList.contains('expanded');
   }
+  // --- live session counter ------------------------------------------------
+  // Server emits HX-Trigger: {"session-updated": {done, target, active}} on
+  // every decide/skip/undo/cluster-resolve. We update the header chip in
+  // place so the user sees the counter move without waiting for a full
+  // page load.
+  document.body.addEventListener('session-updated', function(e) {
+    const d = (e.detail) || {};
+    const progress = document.querySelector('header .progress');
+    if (!progress) return;
+    if (d.active === false) {
+      progress.style.display = 'none';
+      return;
+    }
+    progress.style.display = '';
+    const doneSpan = progress.querySelector('.done');
+    if (doneSpan) doneSpan.textContent = String(d.done ?? 0);
+    let ofSpan = progress.querySelector('.of');
+    if ((d.target ?? 0) > 0) {
+      if (!ofSpan) {
+        ofSpan = document.createElement('span');
+        ofSpan.className = 'of';
+        progress.appendChild(ofSpan);
+      }
+      ofSpan.textContent = ' / ' + d.target;
+    } else if (ofSpan) {
+      ofSpan.remove();
+    }
+  });
+
   function lightbox() { return document.getElementById('lightbox'); }
   function lightboxOpen() {
     const lb = lightbox();

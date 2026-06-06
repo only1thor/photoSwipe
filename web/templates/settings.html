@@ -28,7 +28,7 @@
       <label class="check">
         <input type="checkbox" name="skip_advances_counter" {{if .Settings.SkipAdvancesCounter}}checked{{end}}>
         Skip counts toward the batch
-        <small>If on, a skip uses one of the batch slots (predictable count). If off, skipping pulls in a replacement photo so the batch is N actual decisions.</small>
+        <small>Off (default): only keeps and trashes count; skipping pulls in a replacement so the batch is N real decisions. On: every skip also burns a slot, capping the batch at N total taps no matter what.</small>
       </label>
       <label class="check">
         <input type="checkbox" name="cluster_counts_as_one" {{if .Settings.ClusterCountsAsOne}}checked{{end}}>
