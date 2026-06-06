@@ -14,8 +14,14 @@
   function clusterIsExpanded(card) {
     return card && card.classList.contains('expanded');
   }
+  function lightbox() { return document.getElementById('lightbox'); }
+  function lightboxOpen() {
+    const lb = lightbox();
+    return lb && !lb.hasAttribute('hidden');
+  }
 
   function decide(action) {
+    if (lightboxOpen()) return; // ignore decisions while zoomed
     const cluster = currentClusterCard();
     if (cluster) { handleClusterAction(action, cluster); return; }
     const id = currentCard()?.dataset.photoId;
@@ -27,6 +33,7 @@
   }
 
   function undo() {
+    if (lightboxOpen()) { closeLightbox(); return; }
     if (typeof htmx === 'undefined') return;
     htmx.ajax('POST', '/undo', { target: '#photo-area', swap: 'innerHTML' });
   }
@@ -43,20 +50,74 @@
         return;
       }
     }
-    // Expanded: per-photo buttons are inert; user uses Apply / Skip.
   }
 
-  // Zoom is "tap to enter, tap to exit". For single-photo cards we toggle
-  // .zoomed on the card; for cluster thumbs we toggle it on the .cluster-thumb.
-  function zoomElement(el) {
-    if (!el) return;
-    el.classList.toggle('zoomed');
+  // --- lightbox: body-level fullscreen zoom -----------------------------
+  // Uses a single <div id="lightbox"> in the layout. The image src is set
+  // to /photo/{id} (full-quality, browser-cached); pointer-events: none on
+  // the img means a tap anywhere bubbles to the overlay's dismiss handler.
+
+  let lightboxZoom = 1;
+  function openLightbox(photoId) {
+    const lb = lightbox();
+    if (!lb || !photoId) return;
+    const img = document.getElementById('lightbox-img');
+    img.src = '/photo/' + encodeURIComponent(photoId);
+    lightboxZoom = 1;
+    lb.style.setProperty('--lightbox-zoom', '1');
+    lb.removeAttribute('hidden');
+    // Block the page behind from scrolling on iOS while zoomed.
+    document.documentElement.style.overflow = 'hidden';
   }
+  function closeLightbox() {
+    const lb = lightbox();
+    if (!lb) return;
+    lb.setAttribute('hidden', '');
+    const img = document.getElementById('lightbox-img');
+    if (img) img.src = '';
+    document.documentElement.style.overflow = '';
+  }
+  function adjustLightboxZoom(deltaY, originX, originY) {
+    const lb = lightbox();
+    if (!lb) return;
+    const factor = deltaY > 0 ? 0.88 : 1.12;
+    lightboxZoom = Math.max(0.5, Math.min(8, lightboxZoom * factor));
+    // Pan origin towards the cursor for "scroll where I'm pointing".
+    if (originX != null && originY != null) {
+      lb.style.setProperty('transform-origin', `${originX}px ${originY}px`);
+    }
+    lb.style.setProperty('--lightbox-zoom', String(lightboxZoom));
+  }
+
+  // Tap anywhere on the lightbox dismisses it. The img is pointer-events:
+  // none so its taps bubble here too.
+  document.addEventListener('click', function(e) {
+    const lb = lightbox();
+    if (!lb || lb.hasAttribute('hidden')) return;
+    if (!e.target.closest('#lightbox')) return;
+    closeLightbox();
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  // Scroll-to-zoom on desktop (any scroll wheel inside the lightbox).
+  document.addEventListener('wheel', function(e) {
+    if (!lightboxOpen()) return;
+    if (!e.target.closest('#lightbox')) return;
+    e.preventDefault();
+    adjustLightboxZoom(e.deltaY, e.clientX, e.clientY);
+  }, { passive: false });
 
   // --- keyboard ---
   document.addEventListener('keydown', function(e) {
     if (e.target.matches('input, textarea, select')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape') { if (lightboxOpen()) closeLightbox(); return; }
+    if (lightboxOpen()) {
+      // While zoomed, swallow gesture keys; spacebar/Enter dismisses.
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); closeLightbox(); }
+      return;
+    }
     switch (e.key) {
       case 'ArrowLeft': case 'j': case 'J':
         e.preventDefault(); decide('trash'); break;
@@ -66,16 +127,18 @@
         e.preventDefault(); decide('skip'); break;
       case 'z': case 'Z':
         e.preventDefault(); undo(); break;
-      case ' ':
-        e.preventDefault(); zoomElement(currentCard()); break;
-      case 'Escape':
-        document.querySelectorAll('.zoomed').forEach(el => el.classList.remove('zoomed'));
+      case ' ': {
+        e.preventDefault();
+        const c = currentCard();
+        if (c) openLightbox(c.dataset.photoId);
         break;
+      }
     }
   });
 
   // --- buttons + info-toggle ---
   document.addEventListener('click', function(e) {
+    if (lightboxOpen()) return; // handled by capture-phase above
     const infoBtn = e.target.closest('[data-info-toggle]');
     if (infoBtn) {
       const card = infoBtn.closest('.card');
@@ -95,39 +158,25 @@
     if (action === 'undo') undo(); else decide(action);
   });
 
-  // --- click-to-zoom on cluster thumbs (separate from the corner check) ---
+  // --- tap-to-zoom on cluster thumbs (the corner ✓ is a separate label) ---
   document.addEventListener('click', function(e) {
-    // First: tap on a zoomed cluster thumb exits zoom.
-    const zoomed = e.target.closest('.cluster-thumb.zoomed');
-    if (zoomed) {
-      // If the user actually tapped the corner check inside zoom, let the
-      // checkbox toggle normally and don't exit.
-      if (!e.target.closest('.check-corner')) {
-        zoomed.classList.remove('zoomed');
-        e.preventDefault();
-      }
-      return;
-    }
-    // Then: tap on a non-zoomed cluster thumb (anywhere except the corner)
-    // enters zoom.
+    if (lightboxOpen()) return;
     const thumb = e.target.closest('.cluster-thumb');
-    if (thumb && !e.target.closest('.check-corner')) {
-      thumb.classList.add('zoomed');
-      e.preventDefault();
-    }
+    if (!thumb) return;
+    // Clicks on the corner check toggle the input natively; don't zoom.
+    if (e.target.closest('.check-corner')) return;
+    const id = thumb.dataset.photoId;
+    if (id) openLightbox(id);
   });
 
-  // --- touch/mouse drag for swipe; tap-with-no-movement = zoom toggle on single cards ---
+  // --- swipe / tap on cards -----------------------------------------------
   let drag = null;
   function startDrag(e) {
-    // Never start a drag from form controls, buttons, labels, or the info icon.
+    if (lightboxOpen()) return;
     if (e.target.closest('input, button, label, [data-info-toggle], .check-corner')) return;
     const card = e.target.closest('.card');
     if (!card) return;
-    // No swipes inside an expanded cluster grid; the grid scrolls / taps.
     if (card.dataset.cardKind === 'cluster' && card.classList.contains('expanded')) return;
-    // No swipes on a zoomed card either (let the user pan/pinch).
-    if (card.classList.contains('zoomed')) return;
     const point = e.touches ? e.touches[0] : e;
     drag = {
       card: card,
@@ -140,7 +189,7 @@
     const point = e.touches ? e.touches[0] : e;
     const dx = point.clientX - drag.x0;
     const dy = point.clientY - drag.y0;
-    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return; // ignore noise
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
     drag.card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx * 0.04}deg)`;
     drag.card.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
     const absX = Math.abs(dx), absY = Math.abs(dy);
@@ -170,8 +219,7 @@
       if (dy < -SWIPE_DIST || (dy < -30 && vel > SWIPE_VELOCITY)) action = 'skip';
     }
 
-    // Pure tap (no swipe + barely moved) → toggle zoom. Cluster collapsed
-    // stack: tap expands the grid instead.
+    // Pure tap → zoom (single card) or expand (collapsed cluster).
     if (!action && absX < TAP_SLOP && absY < TAP_SLOP) {
       c.style.transition = '';
       c.style.transform = '';
@@ -179,7 +227,7 @@
       if (isCluster && !c.classList.contains('expanded')) {
         c.classList.add('expanded');
       } else if (!isCluster) {
-        c.classList.toggle('zoomed');
+        openLightbox(c.dataset.photoId);
       }
       drag = null;
       return;

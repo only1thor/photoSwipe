@@ -259,33 +259,10 @@ button.primary, .session-start button[type="submit"] {
 .badge.keep { background: rgba(52,199,89,0.85); }
 .badge.unsure { background: rgba(255,176,32,0.85); }
 
-.card.zoomed {
-  position: fixed;
-  inset: 0;
-  max-width: none;
-  max-height: none;
-  border-radius: 0;
-  z-index: 50;
-  background: rgba(0,0,0,0.96);
-}
-.card.zoomed img {
-  max-width: 100vw;
-  max-height: 100vh;
-  width: 100vw;
-  height: 100vh;
-  object-fit: contain;
-}
-.card.zoomed::after {
-  content: 'tap to dismiss · pinch to zoom';
-  position: fixed;
-  bottom: 16px;
-  left: 0; right: 0;
-  text-align: center;
-  color: rgba(255,255,255,0.7);
-  font-size: 0.85rem;
-  pointer-events: none;
-  z-index: 55;
-}
+/* Zoom is handled by a body-level #lightbox overlay instead of toggling
+   .zoomed on the card itself, because .card has will-change:transform
+   (and gets inline transforms during swipe drags), both of which create
+   a containing block and trap position:fixed inside the card box. */
 
 .actions {
   display: flex;
@@ -742,36 +719,9 @@ button.primary, .session-start button[type="submit"] {
   filter: brightness(0.6) saturate(0.75);
 }
 
-.cluster-thumb.zoomed {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  border-radius: 0;
-  background: rgba(0,0,0,0.96);
-  display: grid;
-  place-items: center;
-  border: none;
-}
-.cluster-thumb.zoomed img {
-  width: 100vw;
-  height: 100vh;
-  object-fit: contain;
-  filter: none !important;
-}
-.cluster-thumb.zoomed .check-corner {
-  top: 16px;
-  right: 16px;
-}
-.cluster-thumb.zoomed::after {
-  content: 'tap to dismiss';
-  position: fixed;
-  bottom: 16px;
-  left: 0; right: 0;
-  text-align: center;
-  color: rgba(255,255,255,0.7);
-  font-size: 0.85rem;
-  pointer-events: none;
-}
+/* Cluster thumb zoom: handled via the body-level #lightbox; nothing
+   sticky to do here. The :not(.zoomed) dim selector keeps working
+   harmlessly even though we no longer add .zoomed. */
 
 /* --- i-icon meta UX on single-photo cards --- */
 .info-toggle {
@@ -809,3 +759,56 @@ button.primary, .session-start button[type="submit"] {
 
 /* The legacy bottom-strip mode keeps the original .card-meta layout. */
 .card-meta.strip { /* inherits prior .card-meta rules */ }
+
+/* --- body-level lightbox for tap-to-zoom --- */
+#lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0,0,0,0.97);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  /* Pinch (mobile) zooms the visual viewport — works because layout.html
+     sets user-scalable=yes. Scroll-to-zoom on desktop is handled in JS. */
+  touch-action: pinch-zoom;
+  /* Guard against accidental text selection / iOS callout when a user
+     long-presses inside the overlay. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+#lightbox[hidden] { display: none !important; }
+#lightbox-img {
+  max-width: 100vw;
+  max-height: 100vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  transform: scale(var(--lightbox-zoom, 1));
+  transform-origin: center center;
+  transition: transform 0.06s linear;
+  /* Pointer events disabled so a click anywhere — even on the image —
+     bubbles to the overlay's dismiss handler. */
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.lightbox-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 0; right: 0;
+  text-align: center;
+  color: rgba(255,255,255,0.7);
+  font-size: 0.85rem;
+  pointer-events: none;
+  margin: 0;
+}
+/* Hide the hint after a few seconds so it doesn't obscure the photo. */
+#lightbox .lightbox-hint {
+  animation: lightbox-hint-fade 4.5s ease-out forwards;
+}
+@keyframes lightbox-hint-fade {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
