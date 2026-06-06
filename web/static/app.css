@@ -582,15 +582,28 @@ button.primary, .session-start button[type="submit"] {
 .admin-actions form { display: inline-block; margin-right: 1rem; }
 
 /* --- cluster card: stack collapsed view --- */
-.card.cluster { background: transparent; padding: 0; border: none; }
-.card.cluster .cluster-form { display: contents; }
+/* Cluster card: override .card's flex layout so the stack/grid can size
+   themselves from their own content. Keep the cluster card the same
+   visual footprint as a single photo card (max ~800px wide). */
+.card.cluster {
+  background: transparent;
+  padding: 0;
+  border: none;
+  display: block;
+  width: min(100%, 800px);
+  max-height: 100%;
+  overflow: visible;
+  box-shadow: none;
+}
+.card.cluster .cluster-form { display: block; width: 100%; }
 
 .stack-face {
   position: relative;
   display: block;
-  width: 100%;
-  aspect-ratio: 3/4;
+  width: min(100%, 520px);
+  height: calc(100vh - 240px);
   max-height: 80vh;
+  margin: 0 auto;
 }
 .card.cluster.expanded .stack-face { display: none; }
 
@@ -602,7 +615,16 @@ button.primary, .session-start button[type="submit"] {
   border: 1px solid var(--border);
   box-shadow: 0 6px 20px rgba(0,0,0,0.35);
 }
-.stack-front { object-fit: cover; z-index: 3; }
+/* Use higher specificity than `.card img` so the stack front fills the
+   stack-face instead of being constrained by the single-photo rules. */
+.card.cluster .stack-front {
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+}
 .stack-layer.mid {
   z-index: 2;
   transform: translate(8px, 6px) rotate(2deg);
