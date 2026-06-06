@@ -30,6 +30,11 @@
         Skip counts toward the batch
         <small>If on, a skip uses one of the batch slots (predictable count). If off, skipping pulls in a replacement photo so the batch is N actual decisions.</small>
       </label>
+      <label class="check">
+        <input type="checkbox" name="info_overlay" {{if .Settings.InfoOverlay}}checked{{end}}>
+        Show photo info as a bottom strip
+        <small>Off (default): a small <strong>i</strong> in the top-right reveals path / size / dimensions on demand. On: the strip is always visible across the bottom of the photo.</small>
+      </label>
     </fieldset>
 
     <fieldset>

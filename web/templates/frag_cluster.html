@@ -1,24 +1,42 @@
 {{define "cluster"}}
 <article class="card cluster" data-card-kind="cluster" data-cluster-id="{{.ClusterID}}">
-  <header class="cluster-head">
-    <strong>{{len .Photos}} similar photos</strong>
-    <small>Tick the ones to keep. Unticked photos will be trashed when you apply.</small>
-  </header>
-  <form id="cluster-form" class="cluster-grid"
+  <form class="cluster-form"
         hx-post="/cluster/resolve"
         hx-target="#photo-area"
         hx-swap="innerHTML">
     <input type="hidden" name="cluster_id" value="{{.ClusterID}}">
-    {{range .Photos}}
-    <label class="cluster-thumb">
-      <input type="checkbox" name="keep" value="{{.ID}}">
-      <img src="/thumb/{{.ID}}?w=400" alt="{{.PathShort}}" loading="lazy">
-      <span class="cluster-meta">{{.PathShort}}<br>{{.SizeKB}} KB{{if .TimeStr}} · {{.TimeStr}}{{end}}</span>
-    </label>
-    {{end}}
-    <div class="cluster-actions">
-      <button type="submit" class="primary">Apply</button>
-      <button type="submit" name="action" value="skip" class="secondary">Skip cluster</button>
+
+    {{/* Collapsed stack view — same footprint as a single photo card.
+         Tapping the stack (or right-swipe / Keep button) expands to the
+         grid below; left-swipe submits the form with no keep[] → all
+         members trashed. */}}
+    <div class="stack-face">
+      {{if ge (len .Photos) 3}}<div class="stack-layer back" aria-hidden="true"></div>{{end}}
+      {{if ge (len .Photos) 2}}<div class="stack-layer mid" aria-hidden="true"></div>{{end}}
+      {{if gt (len .Photos) 0}}
+      <img class="stack-front" src="/thumb/{{(index .Photos 0).ID}}?w=800" alt="" draggable="false">
+      {{end}}
+      <span class="stack-count">{{len .Photos}}</span>
+      <span class="stack-hint">tap or → to pick keepers · ← to trash all</span>
+    </div>
+
+    {{/* Expanded grid view — tap a thumb's corner ✓ to keep it, leave
+         unchecked to trash. Tap-and-hold a thumb to zoom. */}}
+    <div class="grid-face">
+      <p class="grid-hint">Tick the ones to keep. Long-press to zoom.</p>
+      <div class="cluster-grid">
+        {{range .Photos}}
+        <label class="cluster-thumb">
+          <input type="checkbox" name="keep" value="{{.ID}}">
+          <img src="/thumb/{{.ID}}?w=400" alt="" loading="lazy" draggable="false">
+          <span class="check-corner" aria-hidden="true">✓</span>
+        </label>
+        {{end}}
+      </div>
+      <div class="cluster-actions">
+        <button type="submit" class="primary">Apply</button>
+        <button type="submit" name="action" value="skip" class="secondary">Skip cluster</button>
+      </div>
     </div>
   </form>
 </article>

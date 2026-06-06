@@ -239,6 +239,7 @@ func (h *handler) handleHome(w http.ResponseWriter, r *http.Request) {
 		Session:   sess,
 		Counts:    h.counts(),
 		Photo:     photo,
+		Settings:  h.deps.Store.Settings(),
 	}
 	if cluster := h.openClusterFor(photo); cluster != nil {
 		data.ClusterID = cluster.ID
@@ -296,14 +297,16 @@ func (h *handler) renderNext(w http.ResponseWriter) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	settings := h.deps.Store.Settings()
 	if cluster := h.openClusterFor(photo); cluster != nil {
 		h.renderFragment(w, h.tplCluster, "cluster", pageData{
 			ClusterID: cluster.ID,
 			Photos:    clusterMembers(cluster),
+			Settings:  settings,
 		})
 		return
 	}
-	h.renderFragment(w, h.tplCard, "card", pageData{Photo: photo})
+	h.renderFragment(w, h.tplCard, "card", pageData{Photo: photo, Settings: settings})
 }
 
 func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
@@ -487,6 +490,7 @@ func (h *handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		cur.DefaultMix = mix
 	}
 	cur.SkipAdvancesCounter = r.PostFormValue("skip_advances_counter") != ""
+	cur.InfoOverlay = r.PostFormValue("info_overlay") != ""
 	if err := h.deps.Store.UpdateSettings(cur); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

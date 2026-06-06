@@ -104,6 +104,10 @@ type Settings struct {
 	// slots (true, default — predictable count) or pulls in a replacement
 	// (false — skip is truly free).
 	SkipAdvancesCounter bool `json:"skip_advances_counter"`
+	// InfoOverlay controls how photo metadata is shown on the swipe card.
+	// false (default) → small "i" icon top-right that expands a panel
+	// on click. true → bottom strip overlay as in earlier versions.
+	InfoOverlay bool `json:"info_overlay"`
 }
 
 func DefaultSettings() Settings {

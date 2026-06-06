@@ -1,10 +1,14 @@
 {{define "card"}}
-<article class="card" data-photo-id="{{.Photo.ID}}">
+<article class="card" data-photo-id="{{.Photo.ID}}" data-card-kind="single">
   <img src="/photo/{{.Photo.ID}}" alt="" draggable="false">
-  <div class="card-meta" hx-get="/meta/{{.Photo.ID}}" hx-trigger="load" hx-swap="innerHTML">
+  {{if .Settings.InfoOverlay}}
+  <div class="card-meta strip" hx-get="/meta/{{.Photo.ID}}" hx-trigger="load" hx-swap="innerHTML">
     <span class="path">{{.Photo.Path}}</span>
   </div>
+  {{else}}
+  <button class="info-toggle" type="button" data-info-toggle aria-label="show info">i</button>
+  <div class="card-meta panel" hx-get="/meta/{{.Photo.ID}}" hx-trigger="info-show once" hx-swap="innerHTML"></div>
+  {{end}}
   {{if eq (printf "%s" .Photo.State) "kept"}}<span class="badge keep">kept ×{{.Photo.KeepCount}}</span>{{end}}
-  {{if eq (printf "%s" .Photo.State) "unsure"}}<span class="badge unsure">unsure ×{{.Photo.UnsureCount}}</span>{{end}}
 </article>
 {{end}}

@@ -580,3 +580,147 @@ button.primary, .session-start button[type="submit"] {
 .admin-actions { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .admin-actions h2 { font-size: 1rem; margin: 0 0 0.5rem; }
 .admin-actions form { display: inline-block; margin-right: 1rem; }
+
+/* --- cluster card: stack collapsed view --- */
+.card.cluster { background: transparent; padding: 0; border: none; }
+.card.cluster .cluster-form { display: contents; }
+
+.stack-face {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3/4;
+  max-height: 80vh;
+}
+.card.cluster.expanded .stack-face { display: none; }
+
+.stack-front, .stack-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+}
+.stack-front { object-fit: cover; z-index: 3; }
+.stack-layer.mid {
+  z-index: 2;
+  transform: translate(8px, 6px) rotate(2deg);
+  background: var(--bg-elev);
+}
+.stack-layer.back {
+  z-index: 1;
+  transform: translate(16px, 12px) rotate(4deg);
+  background: var(--bg-elev);
+  opacity: 0.85;
+}
+.stack-count {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 4;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.65);
+  color: #fff;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.5px;
+}
+.stack-hint {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 4;
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.85);
+  background: rgba(0,0,0,0.55);
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+}
+
+/* --- cluster card: grid expanded view (override prior styles) --- */
+.grid-face { display: none; }
+.card.cluster.expanded .grid-face { display: block; }
+.grid-hint {
+  margin: 0 0 0.5rem;
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  text-align: center;
+}
+.cluster-thumb {
+  position: relative;
+  display: block;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.18s ease;
+}
+.cluster-thumb img { width: 100%; height: 140px; object-fit: cover; display: block; transition: filter 0.15s; }
+.cluster-thumb input { position: absolute; opacity: 0; pointer-events: none; }
+.cluster-thumb .check-corner {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px; height: 28px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.25);
+  font-weight: 700;
+  display: grid; place-items: center;
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+.cluster-thumb:has(input:checked) { border-color: var(--keep, #4ade80); }
+.cluster-thumb:has(input:checked) img { filter: none; }
+.cluster-thumb:has(input:checked) .check-corner { background: var(--keep, #4ade80); color: white; }
+.cluster-thumb:not(:has(input:checked)) img { filter: brightness(0.55) saturate(0.7); }
+
+.cluster-thumb.zoomed {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  border-radius: 0;
+  background: rgba(0,0,0,0.95);
+  display: grid;
+  place-items: center;
+}
+.cluster-thumb.zoomed img { width: 100vw; height: 100vh; object-fit: contain; filter: none; }
+
+/* --- i-icon meta UX on single-photo cards --- */
+.info-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  width: 32px; height: 32px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.55);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.25);
+  font-family: serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.card-meta.panel {
+  position: absolute;
+  top: 50px;
+  right: 10px;
+  z-index: 9;
+  max-width: 75%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.75);
+  color: white;
+  font-size: 0.8rem;
+  display: none;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.card.show-info .card-meta.panel { display: flex; }
+
+/* The legacy bottom-strip mode keeps the original .card-meta layout. */
+.card-meta.strip { /* inherits prior .card-meta rules */ }
