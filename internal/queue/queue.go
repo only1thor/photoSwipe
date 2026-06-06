@@ -39,6 +39,10 @@ func (s *Selector) Next(photos []*store.Photo, sess *store.Session, settings sto
 
 	newMult, resurfaceMult := mixWeights(sess.Mix)
 	cooldown := time.Duration(settings.CooldownHours * float64(time.Hour))
+	skipped := make(map[string]struct{}, len(sess.RecentlySkipped))
+	for _, id := range sess.RecentlySkipped {
+		skipped[id] = struct{}{}
+	}
 
 	type cand struct {
 		photo  *store.Photo
@@ -48,6 +52,9 @@ func (s *Selector) Next(photos []*store.Photo, sess *store.Session, settings sto
 	var total float64
 
 	for _, p := range photos {
+		if _, sk := skipped[p.ID]; sk {
+			continue
+		}
 		w := weightFor(p, settings, newMult, resurfaceMult, cooldown, now)
 		if w <= 0 {
 			continue

@@ -80,8 +80,23 @@ func (s *Store) load() error {
 	if rs.Settings.BaseRate == 0 {
 		rs.Settings = DefaultSettings()
 	}
+	defs := DefaultSettings()
 	if rs.Settings.DupeThreshold == 0 {
-		rs.Settings.DupeThreshold = DefaultSettings().DupeThreshold
+		rs.Settings.DupeThreshold = defs.DupeThreshold
+	}
+	if rs.Settings.DefaultBatchSize == 0 {
+		rs.Settings.DefaultBatchSize = defs.DefaultBatchSize
+	}
+	if !rs.Settings.DefaultMix.Valid() {
+		rs.Settings.DefaultMix = defs.DefaultMix
+	}
+	// Normalize any pre-existing StateUnsure photos to StateUnsorted —
+	// the "skip" model treats them as undecided. UnsureCount is preserved
+	// so the resurface algorithm can still wind down their weight.
+	for _, p := range rs.Photos {
+		if p.State == StateUnsure {
+			p.State = StateUnsorted
+		}
 	}
 	s.state = rs
 	return nil
@@ -325,6 +340,23 @@ func (s *Store) StartSession(target int, mix CompositionMix) (*Session, error) {
 	return &clone, nil
 }
 
+// AutoStartSession creates a session using saved defaults
+// (Settings.DefaultBatchSize + DefaultMix). Used by `/` when no session
+// is active so the user lands directly in the swipe view.
+func (s *Store) AutoStartSession() (*Session, error) {
+	s.mu.RLock()
+	target := s.state.Settings.DefaultBatchSize
+	mix := s.state.Settings.DefaultMix
+	s.mu.RUnlock()
+	if target < 0 {
+		target = 0
+	}
+	if !mix.Valid() {
+		mix = MixMixed
+	}
+	return s.StartSession(target, mix)
+}
+
 func (s *Store) EndSession() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -395,6 +427,103 @@ func (s *Store) RecordDecision(photoID string, newState PhotoState, trashFrom, t
 	return &d, nil
 }
 
+// RecordSkip marks a photo as skipped for the current session. The photo's
+// State and counters are untouched — semantically, the photo behaves as if
+// it was never shown. The ID is pushed onto Session.RecentlySkipped so the
+// queue won't immediately re-pick it; the cap is the session target (or 5
+// when open-ended). Whether Session.Done advances is governed by
+// Settings.SkipAdvancesCounter.
+func (s *Store) RecordSkip(photoID string) (*Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.state.Photos[photoID]
+	if !ok {
+		return nil, fmt.Errorf("photo %s not found", photoID)
+	}
+	if s.state.Session == nil {
+		return nil, errors.New("no active session")
+	}
+	now := time.Now()
+	advance := s.state.Settings.SkipAdvancesCounter
+	d := Decision{
+		PhotoID:         photoID,
+		PrevState:       p.State,
+		NewState:        p.State,
+		Timestamp:       now,
+		PrevLastSeenAt:  p.LastSeenAt,
+		Skipped:         true,
+		AdvancedCounter: advance,
+	}
+	p.LastSeenAt = now
+
+	cap := s.state.Session.Target
+	if cap <= 0 {
+		cap = 5
+	}
+	rs := append(s.state.Session.RecentlySkipped, photoID)
+	if len(rs) > cap {
+		rs = rs[len(rs)-cap:]
+	}
+	s.state.Session.RecentlySkipped = rs
+	s.state.Session.Stack = append(s.state.Session.Stack, d)
+	if advance {
+		s.state.Session.Done++
+		s.state.DailyStats[now.Format("2006-01-02")]++
+	}
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// RecordClusterDecision applies a set of per-member transitions atomically:
+// for each member, the caller supplies the desired NewState and (for trash
+// targets) the TrashFrom/TrashTo paths. The whole apply counts as one
+// session decision; undo restores every member in reverse order.
+func (s *Store) RecordClusterDecision(clusterID string, ops []ClusterMemberOp) (*Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Session == nil {
+		return nil, errors.New("no active session")
+	}
+	now := time.Now()
+	// Snapshot prev state before mutating so undo is sound.
+	for i := range ops {
+		p, ok := s.state.Photos[ops[i].PhotoID]
+		if !ok {
+			return nil, fmt.Errorf("photo %s not found", ops[i].PhotoID)
+		}
+		ops[i].PrevState = p.State
+		ops[i].PrevKeepCount = p.KeepCount
+		ops[i].PrevUnsureCount = p.UnsureCount
+		ops[i].PrevLastSeenAt = p.LastSeenAt
+	}
+	for _, op := range ops {
+		p := s.state.Photos[op.PhotoID]
+		switch op.NewState {
+		case StateKept:
+			p.KeepCount++
+		case StateTrashed:
+			p.TrashedPath = op.TrashTo
+		}
+		p.State = op.NewState
+		p.LastDecisionAt = now
+		p.LastSeenAt = now
+	}
+	d := Decision{
+		PhotoID:   clusterID,
+		Timestamp: now,
+		Cluster:   ops,
+	}
+	s.state.Session.Done++
+	s.state.Session.Stack = append(s.state.Session.Stack, d)
+	s.state.DailyStats[now.Format("2006-01-02")]++
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
 // SetPhotoState changes a photo's state outside of any session — used by
 // the duplicates resolution flow. Does NOT touch the session undo stack
 // or session.Done; bumps daily decision count.
@@ -421,8 +550,10 @@ func (s *Store) SetPhotoState(id string, newState PhotoState, trashTo string) er
 	return s.saveLocked()
 }
 
-// Undo pops the most recent decision and reverts the photo. The caller is
-// responsible for any filesystem rollback (moving a file back from trash).
+// Undo pops the most recent decision and reverts the photo (or whole
+// cluster). The caller is responsible for any filesystem rollback (moving
+// files back from trash) — Undo returns the popped Decision so the handler
+// can iterate Cluster / replay TrashFrom-TrashTo restores.
 func (s *Store) Undo() (*Decision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -431,25 +562,70 @@ func (s *Store) Undo() (*Decision, error) {
 	}
 	last := s.state.Session.Stack[len(s.state.Session.Stack)-1]
 	s.state.Session.Stack = s.state.Session.Stack[:len(s.state.Session.Stack)-1]
-
-	p, ok := s.state.Photos[last.PhotoID]
-	if !ok {
-		return nil, fmt.Errorf("photo %s not found", last.PhotoID)
-	}
-	p.State = last.PrevState
-	p.KeepCount = last.PrevKeepCount
-	p.UnsureCount = last.PrevUnsureCount
-	p.LastSeenAt = last.PrevLastSeenAt
-	if last.NewState == StateTrashed {
-		p.TrashedPath = ""
-	}
-
-	if s.state.Session.Done > 0 {
-		s.state.Session.Done--
-	}
 	day := last.Timestamp.Format("2006-01-02")
-	if s.state.DailyStats[day] > 0 {
-		s.state.DailyStats[day]--
+
+	switch {
+	case last.Skipped:
+		// Restore the LastSeenAt; counters and state weren't touched.
+		if p, ok := s.state.Photos[last.PhotoID]; ok {
+			p.LastSeenAt = last.PrevLastSeenAt
+		}
+		// Also remove from RecentlySkipped (last occurrence).
+		rs := s.state.Session.RecentlySkipped
+		for i := len(rs) - 1; i >= 0; i-- {
+			if rs[i] == last.PhotoID {
+				s.state.Session.RecentlySkipped = append(rs[:i], rs[i+1:]...)
+				break
+			}
+		}
+		if last.AdvancedCounter {
+			if s.state.Session.Done > 0 {
+				s.state.Session.Done--
+			}
+			if s.state.DailyStats[day] > 0 {
+				s.state.DailyStats[day]--
+			}
+		}
+	case last.Cluster != nil:
+		// Reverse-iterate; restore each member.
+		for i := len(last.Cluster) - 1; i >= 0; i-- {
+			op := last.Cluster[i]
+			p, ok := s.state.Photos[op.PhotoID]
+			if !ok {
+				continue
+			}
+			p.State = op.PrevState
+			p.KeepCount = op.PrevKeepCount
+			p.UnsureCount = op.PrevUnsureCount
+			p.LastSeenAt = op.PrevLastSeenAt
+			if op.NewState == StateTrashed {
+				p.TrashedPath = ""
+			}
+		}
+		if s.state.Session.Done > 0 {
+			s.state.Session.Done--
+		}
+		if s.state.DailyStats[day] > 0 {
+			s.state.DailyStats[day]--
+		}
+	default:
+		p, ok := s.state.Photos[last.PhotoID]
+		if !ok {
+			return nil, fmt.Errorf("photo %s not found", last.PhotoID)
+		}
+		p.State = last.PrevState
+		p.KeepCount = last.PrevKeepCount
+		p.UnsureCount = last.PrevUnsureCount
+		p.LastSeenAt = last.PrevLastSeenAt
+		if last.NewState == StateTrashed {
+			p.TrashedPath = ""
+		}
+		if s.state.Session.Done > 0 {
+			s.state.Session.Done--
+		}
+		if s.state.DailyStats[day] > 0 {
+			s.state.DailyStats[day]--
+		}
 	}
 
 	if err := s.saveLocked(); err != nil {
