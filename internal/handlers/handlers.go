@@ -563,6 +563,7 @@ func (h *handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	cur.SkipAdvancesCounter = r.PostFormValue("skip_advances_counter") != ""
 	cur.InfoOverlay = r.PostFormValue("info_overlay") != ""
+	cur.ClusterCountsAsOne = r.PostFormValue("cluster_counts_as_one") != ""
 	if err := h.deps.Store.UpdateSettings(cur); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -719,16 +720,18 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Skip cluster: push every member onto RecentlySkipped via the existing
-	// per-photo RecordSkip path. Counter advances once per skip if enabled.
+	// Skip cluster: push every member onto RecentlySkipped and record a
+	// single Decision so the whole cluster costs one batch slot (matches
+	// keep/trash behavior; honors Settings.ClusterCountsAsOne).
 	if action == "skip" {
+		var ids []string
 		for _, p := range target.Photos {
-			if p.State != store.StateUnsorted {
-				continue
+			if p.State == store.StateUnsorted {
+				ids = append(ids, p.ID)
 			}
-			if _, err := h.deps.Store.RecordSkip(p.ID); err != nil {
-				log.Printf("cluster skip %s: %v", p.ID, err)
-			}
+		}
+		if _, err := h.deps.Store.SkipCluster(clusterID, ids); err != nil {
+			log.Printf("cluster skip %s: %v", clusterID, err)
 		}
 		w.Header().Set("HX-Trigger", "session-updated")
 		h.renderNext(w)

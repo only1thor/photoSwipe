@@ -31,6 +31,11 @@
         <small>If on, a skip uses one of the batch slots (predictable count). If off, skipping pulls in a replacement photo so the batch is N actual decisions.</small>
       </label>
       <label class="check">
+        <input type="checkbox" name="cluster_counts_as_one" {{if .Settings.ClusterCountsAsOne}}checked{{end}}>
+        A stack counts as one decision
+        <small>On (default): resolving a near-duplicate stack — keep, trash, or skip — costs one batch slot, just like a single photo. Off: each photo in the stack costs a slot, so a 5-photo stack burns through 5 of your 10.</small>
+      </label>
+      <label class="check">
         <input type="checkbox" name="info_overlay" {{if .Settings.InfoOverlay}}checked{{end}}>
         Show photo info as a bottom strip
         <small>Off (default): a small <strong>i</strong> in the top-right reveals path / size / dimensions on demand. On: the strip is always visible across the bottom of the photo.</small>

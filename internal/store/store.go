@@ -496,6 +496,60 @@ func (s *Store) RecordSkip(photoID string) (*Decision, error) {
 	return &d, nil
 }
 
+// SkipCluster pushes every cluster member onto RecentlySkipped (so the
+// picker won't immediately resurface any of them) and records a single
+// Decision so the whole skip counts as one toward Session.Done — the
+// same accounting as keep/trash on a cluster. Undo removes the IDs from
+// the FIFO and rolls back the Done bump if any.
+func (s *Store) SkipCluster(clusterID string, photoIDs []string) (*Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Session == nil {
+		return nil, errors.New("no active session")
+	}
+	now := time.Now()
+	advance := s.state.Settings.SkipAdvancesCounter
+	cap := s.state.Session.Target
+	if cap <= 0 {
+		cap = 10
+	}
+	rs := append(s.state.Session.RecentlySkipped, photoIDs...)
+	if len(rs) > cap {
+		rs = rs[len(rs)-cap:]
+	}
+	s.state.Session.RecentlySkipped = rs
+
+	ops := make([]ClusterMemberOp, 0, len(photoIDs))
+	for _, id := range photoIDs {
+		ops = append(ops, ClusterMemberOp{PhotoID: id})
+	}
+	d := Decision{
+		PhotoID:         clusterID,
+		Timestamp:       now,
+		Skipped:         true,
+		AdvancedCounter: advance,
+		Cluster:         ops,
+	}
+	bump := 0
+	if advance {
+		bump = 1
+		if !s.state.Settings.ClusterCountsAsOne {
+			bump = len(photoIDs)
+			if bump < 1 {
+				bump = 1
+			}
+		}
+		s.state.Session.Done += bump
+		s.state.DailyStats[now.Format("2006-01-02")] += bump
+	}
+	d.CounterBump = bump
+	s.state.Session.Stack = append(s.state.Session.Stack, d)
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
 // RecordClusterDecision applies a set of per-member transitions atomically:
 // for each member, the caller supplies the desired NewState and (for trash
 // targets) the TrashFrom/TrashTo paths. The whole apply counts as one
@@ -530,14 +584,22 @@ func (s *Store) RecordClusterDecision(clusterID string, ops []ClusterMemberOp) (
 		p.LastDecisionAt = now
 		p.LastSeenAt = now
 	}
-	d := Decision{
-		PhotoID:   clusterID,
-		Timestamp: now,
-		Cluster:   ops,
+	bump := 1
+	if !s.state.Settings.ClusterCountsAsOne {
+		bump = len(ops)
+		if bump < 1 {
+			bump = 1
+		}
 	}
-	s.state.Session.Done++
+	d := Decision{
+		PhotoID:     clusterID,
+		Timestamp:   now,
+		Cluster:     ops,
+		CounterBump: bump,
+	}
+	s.state.Session.Done += bump
 	s.state.Session.Stack = append(s.state.Session.Stack, d)
-	s.state.DailyStats[now.Format("2006-01-02")]++
+	s.state.DailyStats[now.Format("2006-01-02")] += bump
 	if err := s.saveLocked(); err != nil {
 		return nil, err
 	}
@@ -584,13 +646,47 @@ func (s *Store) Undo() (*Decision, error) {
 	s.state.Session.Stack = s.state.Session.Stack[:len(s.state.Session.Stack)-1]
 	day := last.Timestamp.Format("2006-01-02")
 
+	// bumpAmount derives from CounterBump for cluster decisions or skips
+	// (which may have bumped Done by N). Defaults to 1 for back-compat
+	// with state files written before the field existed.
+	bumpAmount := last.CounterBump
+	if bumpAmount <= 0 {
+		bumpAmount = 1
+	}
+	rollbackCounter := func() {
+		if s.state.Session.Done >= bumpAmount {
+			s.state.Session.Done -= bumpAmount
+		} else {
+			s.state.Session.Done = 0
+		}
+		if s.state.DailyStats[day] >= bumpAmount {
+			s.state.DailyStats[day] -= bumpAmount
+		} else {
+			s.state.DailyStats[day] = 0
+		}
+	}
+
 	switch {
+	case last.Skipped && last.Cluster != nil:
+		// Cluster skip: remove every member ID from RecentlySkipped (last
+		// occurrence only, in case the same ID appears more than once).
+		for _, op := range last.Cluster {
+			rs := s.state.Session.RecentlySkipped
+			for i := len(rs) - 1; i >= 0; i-- {
+				if rs[i] == op.PhotoID {
+					s.state.Session.RecentlySkipped = append(rs[:i], rs[i+1:]...)
+					break
+				}
+			}
+		}
+		if last.AdvancedCounter {
+			rollbackCounter()
+		}
 	case last.Skipped:
-		// Restore the LastSeenAt; counters and state weren't touched.
+		// Single-photo skip.
 		if p, ok := s.state.Photos[last.PhotoID]; ok {
 			p.LastSeenAt = last.PrevLastSeenAt
 		}
-		// Also remove from RecentlySkipped (last occurrence).
 		rs := s.state.Session.RecentlySkipped
 		for i := len(rs) - 1; i >= 0; i-- {
 			if rs[i] == last.PhotoID {
@@ -599,12 +695,7 @@ func (s *Store) Undo() (*Decision, error) {
 			}
 		}
 		if last.AdvancedCounter {
-			if s.state.Session.Done > 0 {
-				s.state.Session.Done--
-			}
-			if s.state.DailyStats[day] > 0 {
-				s.state.DailyStats[day]--
-			}
+			rollbackCounter()
 		}
 	case last.Cluster != nil:
 		// Reverse-iterate; restore each member.
@@ -622,12 +713,7 @@ func (s *Store) Undo() (*Decision, error) {
 				p.TrashedPath = ""
 			}
 		}
-		if s.state.Session.Done > 0 {
-			s.state.Session.Done--
-		}
-		if s.state.DailyStats[day] > 0 {
-			s.state.DailyStats[day]--
-		}
+		rollbackCounter()
 	default:
 		p, ok := s.state.Photos[last.PhotoID]
 		if !ok {
@@ -640,12 +726,7 @@ func (s *Store) Undo() (*Decision, error) {
 		if last.NewState == StateTrashed {
 			p.TrashedPath = ""
 		}
-		if s.state.Session.Done > 0 {
-			s.state.Session.Done--
-		}
-		if s.state.DailyStats[day] > 0 {
-			s.state.DailyStats[day]--
-		}
+		rollbackCounter()
 	}
 
 	if err := s.saveLocked(); err != nil {

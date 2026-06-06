@@ -38,7 +38,12 @@ type Decision struct {
 	TrashTo         string             `json:"trash_to,omitempty"`
 	Skipped         bool               `json:"skipped,omitempty"`
 	AdvancedCounter bool               `json:"advanced_counter,omitempty"`
-	Cluster         []ClusterMemberOp  `json:"cluster,omitempty"`
+	// CounterBump is the amount Session.Done was bumped by when this
+	// decision was recorded (cluster decisions can bump by N when
+	// ClusterCountsAsOne is off). Zero means "implicitly 1" — the
+	// undo path treats it as 1 for back-compat with older state files.
+	CounterBump int                `json:"counter_bump,omitempty"`
+	Cluster     []ClusterMemberOp  `json:"cluster,omitempty"`
 }
 
 // ClusterMemberOp records one photo's transition inside a cluster apply,
@@ -108,6 +113,11 @@ type Settings struct {
 	// false (default) → small "i" icon top-right that expands a panel
 	// on click. true → bottom strip overlay as in earlier versions.
 	InfoOverlay bool `json:"info_overlay"`
+	// ClusterCountsAsOne controls how resolving a near-duplicate cluster
+	// counts toward Session.Done. true (default) → the whole cluster is
+	// one decision, matching how a single photo is counted. false →
+	// each affected photo counts (so a 5-member trash bumps Done by 5).
+	ClusterCountsAsOne bool `json:"cluster_counts_as_one"`
 }
 
 func DefaultSettings() Settings {
@@ -123,5 +133,6 @@ func DefaultSettings() Settings {
 		DefaultBatchSize:    10,
 		DefaultMix:          MixMixed,
 		SkipAdvancesCounter: true,
+		ClusterCountsAsOne:  true,
 	}
 }

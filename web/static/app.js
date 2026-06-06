@@ -4,6 +4,14 @@
   const SWIPE_DIST = 80;       // px threshold
   const SWIPE_VELOCITY = 0.4;  // px/ms threshold for "flick"
   const TAP_SLOP = 10;         // px movement still counts as a tap
+  const POST_EXPAND_SUPPRESS = 400; // ms to swallow the synthesized click
+
+  // After a tap expands the cluster stack (or a right-swipe expands it),
+  // mobile browsers fire a synthesized "click" event at the same x,y. That
+  // click now lands on whatever element is at the surfaced grid position
+  // (typically a cluster thumb) and opens the lightbox / toggles a check.
+  // We swallow all clicks for a short window after expansion.
+  let suppressClickUntil = 0;
 
   function currentCard() {
     return document.querySelector('#photo-area .card[data-photo-id]');
@@ -38,15 +46,35 @@
     htmx.ajax('POST', '/undo', { target: '#photo-area', swap: 'innerHTML' });
   }
 
+  // Submit a cluster resolve via htmx with explicit values. Avoids
+  // depending on programmatic clicks of submit buttons that may be
+  // display:none (the Skip cluster button lives inside .grid-face).
+  function submitClusterResolve(clusterId, values) {
+    if (typeof htmx === 'undefined' || !clusterId) return;
+    htmx.ajax('POST', '/cluster/resolve', {
+      target: '#photo-area',
+      swap: 'innerHTML',
+      values: Object.assign({ cluster_id: clusterId }, values || {})
+    });
+  }
+
   function handleClusterAction(action, card) {
     const form = card.querySelector('form');
     if (!form) return;
+    const clusterId = form.querySelector('input[name="cluster_id"]')?.value;
     if (!clusterIsExpanded(card)) {
-      if (action === 'keep') { card.classList.add('expanded'); return; }
-      if (action === 'trash') { form.requestSubmit(); return; }
+      if (action === 'keep') {
+        card.classList.add('expanded');
+        suppressClickUntil = performance.now() + 400;
+        return;
+      }
+      if (action === 'trash') {
+        // No keep[] → server trashes every member.
+        submitClusterResolve(clusterId, {});
+        return;
+      }
       if (action === 'skip') {
-        const btn = form.querySelector('button[name="action"][value="skip"]');
-        if (btn) btn.click();
+        submitClusterResolve(clusterId, { action: 'skip' });
         return;
       }
     }
@@ -88,6 +116,14 @@
     }
     lb.style.setProperty('--lightbox-zoom', String(lightboxZoom));
   }
+
+  // Capture-phase: swallow synthesized clicks that follow a tap-to-expand.
+  document.addEventListener('click', function(e) {
+    if (performance.now() < suppressClickUntil) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
 
   // Tap anywhere on the lightbox dismisses it. The img is pointer-events:
   // none so its taps bubble here too.
@@ -226,6 +262,7 @@
       c.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
       if (isCluster && !c.classList.contains('expanded')) {
         c.classList.add('expanded');
+        suppressClickUntil = performance.now() + POST_EXPAND_SUPPRESS;
       } else if (!isCluster) {
         openLightbox(c.dataset.photoId);
       }
@@ -239,6 +276,7 @@
         c.style.transform = '';
         c.classList.remove('swipe-keep', 'swipe-trash', 'swipe-skip');
         c.classList.add('expanded');
+        suppressClickUntil = performance.now() + POST_EXPAND_SUPPRESS;
         drag = null;
         return;
       }
