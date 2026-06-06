@@ -41,6 +41,7 @@ func ServeThumb(srcAbs, photoDir, id string, maxSide int, w io.Writer) error {
 	}
 
 	// Cache miss — generate
+	exif := ReadExifFile(srcAbs)
 	src, err := os.Open(srcAbs)
 	if err != nil {
 		return err
@@ -50,6 +51,7 @@ func ServeThumb(srcAbs, photoDir, id string, maxSide int, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	srcImg = ApplyOrientation(srcImg, exif.Orientation)
 
 	dst := scaleTo(srcImg, maxSide)
 

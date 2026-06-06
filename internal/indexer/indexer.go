@@ -19,6 +19,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"photoSwipe/internal/dhash"
+	"photoSwipe/internal/img"
 	"photoSwipe/internal/store"
 )
 
@@ -87,15 +88,20 @@ func (ix *Indexer) run() {
 
 func (ix *Indexer) hashOne(p *store.Photo) error {
 	abs := filepath.Join(ix.photoDir, filepath.FromSlash(p.Path))
+	exif := img.ReadExifFile(abs)
+	if !exif.DateTimeOriginal.IsZero() {
+		_ = ix.store.SetCaptureTime(p.ID, exif.DateTimeOriginal)
+	}
 	f, err := os.Open(abs)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	img, _, err := image.Decode(f)
+	decoded, _, err := image.Decode(f)
 	if err != nil {
 		return err
 	}
-	h := dhash.Compute(img)
-	return ix.store.SetHash(p.ID, h)
+	oriented := img.ApplyOrientation(decoded, exif.Orientation)
+	h := dhash.Compute(oriented)
+	return ix.store.SetHash(p.ID, h.H, h.V)
 }
