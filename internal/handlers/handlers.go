@@ -326,6 +326,7 @@ func (h *handler) writeProgressOOB(w http.ResponseWriter) {
 
 func (h *handler) renderForPhoto(w http.ResponseWriter, p *store.Photo) {
 	settings := h.deps.Store.Settings()
+	h.writeProgressOOB(w)
 	if cluster := h.openClusterFor(p); cluster != nil {
 		h.renderFragment(w, h.tplCluster, "cluster", pageData{
 			ClusterID: cluster.ID,
@@ -349,6 +350,7 @@ func (h *handler) renderClusterByID(w http.ResponseWriter, id string) bool {
 		if clusters[i].ID != id {
 			continue
 		}
+		h.writeProgressOOB(w)
 		h.renderFragment(w, h.tplCluster, "cluster", pageData{
 			ClusterID: clusters[i].ID,
 			Photos:    clusterMembers(&clusters[i]),
@@ -363,6 +365,12 @@ func (h *handler) renderClusterByID(w http.ResponseWriter, id string) bool {
 // fragment or, if the picked photo is part of an unresolved cluster, the
 // cluster card fragment. Used by handleNext, handleDecision, and
 // handleClusterResolve when they need to swap #photo-area.
+//
+// Crucially, the progress-chip OOB swap is written only on the body path.
+// When the session is complete or no candidate remains, an HX-Redirect
+// header is sent with a 204 — once any OOB body bytes were flushed, the
+// status code and HX-Redirect header become no-ops, so the client would
+// stay on the swipe view until a manual refresh.
 func (h *handler) renderNext(w http.ResponseWriter) {
 	sess := h.deps.Store.Session()
 	if sess == nil || sess.Complete() {
@@ -380,6 +388,7 @@ func (h *handler) renderNext(w http.ResponseWriter) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	h.writeProgressOOB(w)
 	settings := h.deps.Store.Settings()
 	if cluster := h.openClusterFor(photo); cluster != nil {
 		h.renderFragment(w, h.tplCluster, "cluster", pageData{
@@ -413,8 +422,8 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Update the header chip live via OOB swap (writes before body).
-		h.writeProgressOOB(w)
+		// renderNext writes the OOB chip update + body fragment, or a
+		// 204 + HX-Redirect if no candidate remains.
 		h.renderNext(w)
 		return
 	}
@@ -446,7 +455,6 @@ func (h *handler) handleDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.writeProgressOOB(w)
 	h.renderNext(w)
 }
 
@@ -456,7 +464,6 @@ func (h *handler) handleUndo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.writeProgressOOB(w)
 	switch {
 	case d.Cluster != nil:
 		// Restore every trashed member's file, then re-render the cluster
@@ -740,7 +747,6 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if target == nil {
 		// Cluster vanished (already resolved by another tab); just move on.
-		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
@@ -758,7 +764,6 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.deps.Store.SkipCluster(clusterID, ids); err != nil {
 			log.Printf("cluster skip %s: %v", clusterID, err)
 		}
-		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
@@ -799,14 +804,12 @@ func (h *handler) handleClusterResolve(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if len(ops) == 0 {
-		h.writeProgressOOB(w)
 		h.renderNext(w)
 		return
 	}
 	if _, err := h.deps.Store.RecordClusterDecision(clusterID, ops); err != nil {
 		log.Printf("record cluster %s: %v", clusterID, err)
 	}
-	h.writeProgressOOB(w)
 	h.renderNext(w)
 }
 
