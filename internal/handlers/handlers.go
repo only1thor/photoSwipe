@@ -512,6 +512,16 @@ func (h *handler) handleServePhoto(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Browsers can't render RAW; serve the oriented JPEG preview instead
+	// (generated and cached by the thumbnail pipeline at full view size).
+	if img.IsRaw(abs) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		if err := img.ServeThumb(abs, h.deps.PhotoDir, id, img.ThumbnailMaxSide, w); err != nil {
+			log.Printf("raw preview %s: %v", id, err)
+		}
+		return
+	}
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeFile(w, r, abs)
 }

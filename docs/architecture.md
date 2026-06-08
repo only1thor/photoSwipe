@@ -286,7 +286,7 @@ transient swipe-gesture buffer.
 | `/next`             | GET    | **fragment** `card` (or `HX-Redirect: /` if done) |
 | `/decision`         | POST   | **fragment** `card` (or `HX-Redirect: /` if done) |
 | `/undo`             | POST   | **fragment** `card`                               |
-| `/photo/{id}`       | GET    | raw image bytes                                   |
+| `/photo/{id}`       | GET    | original image bytes (RAW: oriented JPEG preview) |
 | `/thumb/{id}?w=N`   | GET    | JPEG thumbnail (≤1600 px); cached to `.thumbs/`   |
 | `/meta/{id}`        | GET    | **fragment** `meta` (size, dims, mtime)           |
 | `/settings`         | GET    | full page                                         |

@@ -5,18 +5,10 @@
 package indexer
 
 import (
-	"image"
 	"log"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
-
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-
-	_ "golang.org/x/image/webp"
 
 	"photoSwipe/internal/dhash"
 	"photoSwipe/internal/img"
@@ -92,12 +84,7 @@ func (ix *Indexer) hashOne(p *store.Photo) error {
 	if !exif.DateTimeOriginal.IsZero() {
 		_ = ix.store.SetCaptureTime(p.ID, exif.DateTimeOriginal)
 	}
-	f, err := os.Open(abs)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	decoded, _, err := image.Decode(f)
+	decoded, err := img.DecodeImage(abs)
 	if err != nil {
 		return err
 	}

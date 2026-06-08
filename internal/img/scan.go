@@ -9,7 +9,8 @@ import (
 )
 
 // supportedExts lists image formats decodable by the Go standard library
-// plus golang.org/x/image. HEIC is intentionally excluded — it would
+// plus golang.org/x/image, and TIFF-based RAW formats handled via embedded
+// preview extraction (see raw.go). HEIC is intentionally excluded — it would
 // require linking libheif and break the FROM-scratch container.
 var supportedExts = map[string]bool{
 	".jpg":  true,
@@ -17,6 +18,7 @@ var supportedExts = map[string]bool{
 	".png":  true,
 	".gif":  true,
 	".webp": true,
+	".arw":  true, // Sony RAW — displayed via its embedded JPEG preview
 }
 
 // Scan walks photoDir and registers every supported image with the store.

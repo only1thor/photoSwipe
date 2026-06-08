@@ -40,14 +40,10 @@ func ServeThumb(srcAbs, photoDir, id string, maxSide int, w io.Writer) error {
 		return err
 	}
 
-	// Cache miss — generate
+	// Cache miss — generate. DecodeImage transparently handles RAW files by
+	// decoding their embedded JPEG preview.
 	exif := ReadExifFile(srcAbs)
-	src, err := os.Open(srcAbs)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	srcImg, _, err := image.Decode(src)
+	srcImg, err := DecodeImage(srcAbs)
 	if err != nil {
 		return err
 	}

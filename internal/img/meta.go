@@ -41,6 +41,14 @@ func Inspect(absPath string) (Meta, error) {
 	defer f.Close()
 	cfg, _, err := image.DecodeConfig(f)
 	if err != nil {
+		// RAW isn't decodable by the registered codecs; report the embedded
+		// preview's dimensions, which is what we actually display.
+		if IsRaw(absPath) {
+			if im, derr := DecodeImage(absPath); derr == nil {
+				b := im.Bounds()
+				m.Width, m.Height = b.Dx(), b.Dy()
+			}
+		}
 		return m, nil // metadata without dimensions is still useful
 	}
 	m.Width = cfg.Width

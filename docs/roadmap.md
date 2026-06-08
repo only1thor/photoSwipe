@@ -132,9 +132,19 @@ default image stays minimal and HEIC users opt in with their own build.
 
 ### RAW (CR2, NEF, ARW, DNG…) support
 
-**Why deferred:** same reason as HEIC plus much larger format zoo.
-Realistic path: shell out to `dcraw` / `libraw` in a sidecar (option 2
-above). Out of scope for v1's "single binary" promise.
+**Status:** Sony **ARW** is supported. RAW files are TIFF containers that
+embed a full-resolution JPEG preview, so `internal/img/raw.go` walks the
+TIFF IFD tree and extracts the largest embedded JPEG — no `dcraw`/`libraw`,
+no native dependency, container stays `FROM scratch`. That preview drives
+display (`/photo/{id}` serves an oriented JPEG), thumbnails, dHash
+clustering, and the metadata panel. Orientation and capture time come from
+the ARW's own TIFF IFD0/Exif directories.
+
+**Remaining zoo:** CR2 (Canon) and NEF (Nikon) are also TIFF-based and
+should fall out of the same extractor once their preview tag quirks are
+confirmed — add the extension to `rawExts` and test against a sample. DNG
+is likewise TIFF-based. Anything that stores the preview outside a plain
+JPEG strip (rare) would need per-format handling.
 
 ### Pinch-zoom and pan on the swipe card
 

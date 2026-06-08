@@ -23,7 +23,9 @@ type ExifInfo struct {
 	DateTimeOriginal time.Time // zero if absent
 }
 
-// ReadExifFile parses path as a JPEG and returns its EXIF subset. Any error
+// ReadExifFile parses path and returns its EXIF subset. JPEGs are parsed via
+// their APP1 segment; TIFF-based RAW files (e.g. Sony ARW) are themselves
+// TIFF containers, so their leading bytes feed parseExif directly. Any error
 // is swallowed and reported as a zero ExifInfo — callers should treat "no
 // EXIF" and "EXIF parse failed" identically.
 func ReadExifFile(path string) ExifInfo {
@@ -32,11 +34,21 @@ func ReadExifFile(path string) ExifInfo {
 		return ExifInfo{}
 	}
 	defer f.Close()
-	info, err := readExif(f)
-	if err != nil {
+	if info, err := readExif(f); err == nil {
+		return info
+	}
+	// Not a JPEG. RAW files are TIFF containers — Orientation lives inline
+	// in IFD0 and the capture-time string sits in the Exif IFD near the
+	// file head, so a bounded read avoids slurping a 50 MB sensor dump.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return ExifInfo{}
 	}
-	return info
+	head := make([]byte, 1<<20)
+	n, _ := io.ReadFull(f, head)
+	if info, err := parseExif(head[:n]); err == nil {
+		return info
+	}
+	return ExifInfo{}
 }
 
 func readExif(r io.Reader) (ExifInfo, error) {
