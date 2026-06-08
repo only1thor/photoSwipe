@@ -62,21 +62,33 @@
     const form = card.querySelector('form');
     if (!form) return;
     const clusterId = form.querySelector('input[name="cluster_id"]')?.value;
-    if (!clusterIsExpanded(card)) {
-      if (action === 'keep') {
-        card.classList.add('expanded');
-        suppressClickUntil = performance.now() + 400;
-        return;
-      }
-      if (action === 'trash') {
-        // No keep[] → server trashes every member.
-        submitClusterResolve(clusterId, {});
-        return;
-      }
+
+    // Expanded grid: the global action bar / arrow keys mirror the in-grid
+    // controls. Trash commits the current selection (keep the ✓'d photos,
+    // trash the rest); Keep rescues the whole stack; Skip defers it. We
+    // submit the real form so the checkbox state serializes natively into
+    // repeated keep[] fields — same path as the in-grid "Apply" button.
+    if (clusterIsExpanded(card)) {
+      const apply = form.querySelector('.cluster-actions button.primary');
       if (action === 'skip') {
         submitClusterResolve(clusterId, { action: 'skip' });
-        return;
+      } else if (action === 'keep') {
+        form.querySelectorAll('input[name="keep"]').forEach(function(cb) { cb.checked = true; });
+        if (apply) form.requestSubmit(apply);
+      } else if (action === 'trash') {
+        if (apply) form.requestSubmit(apply);
       }
+      return;
+    }
+
+    // Collapsed stack: Keep expands, Trash trashes the whole stack, Skip defers.
+    if (action === 'keep') {
+      card.classList.add('expanded');
+      suppressClickUntil = performance.now() + POST_EXPAND_SUPPRESS;
+    } else if (action === 'trash') {
+      submitClusterResolve(clusterId, {}); // no keep[] → server trashes every member
+    } else if (action === 'skip') {
+      submitClusterResolve(clusterId, { action: 'skip' });
     }
   }
 
