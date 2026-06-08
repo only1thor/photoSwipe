@@ -18,6 +18,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the commit count below is the real build number,
+          # not 1 (a shallow clone only has the tip commit).
+          fetch-depth: 0
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -26,16 +30,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build a CalVer-ish version: <UTC date>.<commit count>.<short sha>,
+      # e.g. 20260608.153.46febfa. The date sorts builds by day, the commit
+      # count is a monotonic incrementor that disambiguates same-day builds,
+      # and the hash pins the exact source revision.
+      - name: Compute version
+        id: version
+        run: |
+          DATE=$(date -u +'%Y%m%d')
+          INCR=$(git rev-list --count HEAD)
+          SHA=$(git rev-parse --short HEAD)
+          echo "version=${DATE}.${INCR}.${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Disable the action's automatic latest so we control exactly when
+          # it moves (only on the default branch, below).
+          flavor: latest=false
           tags: |
-            type=ref,event=branch
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-,format=short
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
